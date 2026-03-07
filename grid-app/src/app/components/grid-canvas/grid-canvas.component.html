@@ -1,0 +1,20 @@
+<div #container class="grid-container">
+    <canvas #gridCanvas class="grid-canvas"></canvas>
+  
+    <input
+      #cellEditor
+      class="cell-editor"
+      [class.visible]="editorVisible"
+      [style.left]="editorStyle['left']"
+      [style.top]="editorStyle['top']"
+      [style.width]="editorStyle['width']"
+      [style.height]="editorStyle['height']"
+      [(ngModel)]="editorValue"
+      (keydown)="onEditorKeydown($event)"
+      (blur)="commitEdit()"
+      type="text"
+      spellcheck="false"
+      autocomplete="off"
+    />
+  </div>
+  

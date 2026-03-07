@@ -1,0 +1,15 @@
+{
+  "name": "grid-wasm",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "grid_wasm_bg.wasm",
+    "grid_wasm.js",
+    "grid_wasm.d.ts"
+  ],
+  "main": "grid_wasm.js",
+  "types": "grid_wasm.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

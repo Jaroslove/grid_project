@@ -1,0 +1,17 @@
+.app-layout {
+    display: flex;
+    flex-direction: column;
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+  }
+  
+  app-grid-toolbar {
+    flex-shrink: 0;
+  }
+  
+  app-grid-canvas {
+    flex: 1;
+    min-height: 0;
+  }
+  

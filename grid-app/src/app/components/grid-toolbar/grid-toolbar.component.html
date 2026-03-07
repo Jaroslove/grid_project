@@ -1,0 +1,38 @@
+<div class="toolbar">
+    <div class="toolbar-section brand">
+      <span class="logo">⊞</span>
+      <span class="title">WASM Grid</span>
+    </div>
+  
+    <div class="toolbar-section actions">
+      <button (click)="populateCells()" class="btn">
+        <span class="icon">📊</span> 10k Cells
+      </button>
+      <button (click)="populate100k()" class="btn">
+        <span class="icon">🚀</span> 100k Cells
+      </button>
+      <div class="separator"></div>
+      <button (click)="addRowGroup()" class="btn">
+        <span class="icon">📁</span> Row Group
+      </button>
+      <button (click)="addNestedRowGroup()" class="btn">
+        <span class="icon">📂</span> Nested Row
+      </button>
+      <button (click)="addColGroup()" class="btn">
+        <span class="icon">📁</span> Col Group
+      </button>
+    </div>
+  
+    <div class="toolbar-section info">
+      @if (selectedCell(); as sel) {
+        <span class="cell-ref">
+          {{ sel.col | number }}:{{ sel.row | number }}
+        </span>
+      }
+      <span class="stats">
+        {{ cellCount() | number }} cells · {{ groupCount() }} groups
+      </span>
+      <span class="status">{{ statusMessage() }}</span>
+    </div>
+  </div>
+  
