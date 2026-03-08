@@ -1,14 +1,9 @@
 import { Injectable, signal, computed } from '@angular/core';
-import type {
-  RenderFrame,
-  HitResult,
-  CellRect,
-  PivotConfig,
-} from '../models/grid.models';
+import type { Frame, HitResult, CellRect, PivotConfig } from '../models/grid.models';
 
 @Injectable({ providedIn: 'root' })
 export class GridWasmService {
-  private grid: any = null;
+  private g: any = null;
 
   readonly ready = signal(false);
   //readonly cellCount = signal(0);
@@ -23,7 +18,7 @@ export class GridWasmService {
       const wasm = await import('../wasm/grid_wasm.js' as any);
       await wasm.default(wasmUrl);
 
-      this.grid = new wasm.Grid(viewportWidth, viewportHeight);
+      this.g = new wasm.Grid(viewportWidth, viewportHeight);
 
       // Populate initial data (pivot-style)
       //this.populateInitialPivotData();
@@ -38,58 +33,66 @@ export class GridWasmService {
   }
 
   
-  loadData(d: any[]): void { this.grid?.load_data(JSON.stringify(d)); }
-  setPivotConfig(c: PivotConfig): void { this.grid?.set_pivot_config(JSON.stringify(c)); }
-  buildPivot(): void { this.grid?.build_pivot(); }
-  toggleRowCollapse(k: string): void { this.grid?.toggle_row_collapse(k); this.grid?.build_pivot(); }
-  toggleColCollapse(k: string): void { this.grid?.toggle_col_collapse(k); this.grid?.build_pivot(); }
+  
+  loadData(d: any[]): void { this.g?.load_data(JSON.stringify(d)); }
+  setPivotConfig(c: PivotConfig): void { this.g?.set_pivot_config(JSON.stringify(c)); }
+  buildPivot(): void { this.g?.build_pivot(); }
 
-  setCell(r: number, c: number, t: string): void { this.grid?.set_cell(r, c, t); }
-  getCellText(r: number, c: number): string { return this.grid?.get_cell_text(r, c) ?? ''; }
-  clearCell(r: number, c: number): void { this.grid?.clear_cell(r, c); }
+  toggleRowCollapse(k: string): void {
+    this.g?.toggle_row_collapse(k);
+    this.g?.build_pivot();
+  }
+  toggleColCollapse(k: string): void {
+    this.g?.toggle_col_collapse(k);
+    this.g?.build_pivot();
+  }
 
-  setViewport(w: number, h: number): void { this.grid?.set_viewport(w, h); }
-  scrollBy(dx: number, dy: number): void { this.grid?.scroll_by(dx, dy); }
-  setScroll(x: number, y: number): void { this.grid?.set_scroll(x, y); }
-  getScrollX(): number { return this.grid?.get_scroll_x() ?? 0; }
-  getScrollY(): number { return this.grid?.get_scroll_y() ?? 0; }
+  setCell(r: number, c: number, t: string): void { this.g?.set_cell(r, c, t); }
+  getCellText(r: number, c: number): string { return this.g?.get_cell_text(r, c) ?? ''; }
+  clearCell(r: number, c: number): void { this.g?.clear_cell(r, c); }
 
-  select(r: number, c: number): void { this.grid?.select(r, c); }
+  setViewport(w: number, h: number): void { this.g?.set_viewport(w, h); }
+  scrollBy(dx: number, dy: number): void { this.g?.scroll_by(dx, dy); }
+  setScroll(x: number, y: number): void { this.g?.set_scroll(x, y); }
+  getScrollX(): number { return this.g?.get_scroll_x() ?? 0; }
+  getScrollY(): number { return this.g?.get_scroll_y() ?? 0; }
+
+  select(r: number, c: number): void { this.g?.select(r, c); }
   selectedCell(): { row: number; col: number } | null {
-    const r = this.grid?.sel_row() ?? -1, c = this.grid?.sel_col() ?? -1;
+    const r = this.g?.sel_row() ?? -1, c = this.g?.sel_col() ?? -1;
     return r >= 0 && c >= 0 ? { row: r, col: c } : null;
   }
-  getSelectedRow(): number { return this.grid?.sel_row() ?? -1; }
-  getSelectedCol(): number { return this.grid?.sel_col() ?? -1; }
-  moveSelection(dr: number, dc: number): void { this.grid?.move_selection(dr, dc); }
+  getSelectedRow(): number { return this.g?.sel_row() ?? -1; }
+  getSelectedCol(): number { return this.g?.sel_col() ?? -1; }
+  moveSelection(dr: number, dc: number): void { this.g?.move_selection(dr, dc); }
 
-  startEdit(r: number, c: number): void { this.grid?.edit(r, c); }
-  stopEdit(): void { this.grid?.edit(-1, -1); }
+  startEdit(r: number, c: number): void { this.g?.edit(r, c); }
+  stopEdit(): void { this.g?.edit(-1, -1); }
 
-  startColResize(c: number, x: number): void { this.grid?.start_col_resize(c, x); }
-  updateColResize(x: number): void { this.grid?.update_col_resize(x); }
-  endColResize(): void { this.grid?.end_col_resize(); }
-  isResizing(): boolean { return this.grid?.is_resizing() ?? false; }
+  startColResize(c: number, x: number): void { this.g?.start_col_resize(c, x); }
+  updateColResize(x: number): void { this.g?.update_col_resize(x); }
+  endColResize(): void { this.g?.end_col_resize(); }
+  isResizing(): boolean { return this.g?.is_resizing() ?? false; }
 
-  startHDrag(x: number): void { this.grid?.start_h_drag(x); }
-  startVDrag(y: number): void { this.grid?.start_v_drag(y); }
-  updateHDrag(x: number): void { this.grid?.update_h_drag(x); }
-  updateVDrag(y: number): void { this.grid?.update_v_drag(y); }
-  endDrag(): void { this.grid?.end_drag(); }
-  isDraggingScrollbar(): boolean { return this.grid?.is_dragging_scrollbar() ?? false; }
-  clickHTrack(x: number): void { this.grid?.click_h_track(x); }
-  clickVTrack(y: number): void { this.grid?.click_v_track(y); }
+  startHDrag(x: number): void { this.g?.start_h_drag(x); }
+  startVDrag(y: number): void { this.g?.start_v_drag(y); }
+  updateHDrag(x: number): void { this.g?.update_h_drag(x); }
+  updateVDrag(y: number): void { this.g?.update_v_drag(y); }
+  endDrag(): void { this.g?.end_drag(); }
+  isDraggingScrollbar(): boolean { return this.g?.is_dragging_scrollbar() ?? false; }
+  clickHTrack(x: number): void { this.g?.click_h_track(x); }
+  clickVTrack(y: number): void { this.g?.click_v_track(y); }
 
-  renderFrame(): RenderFrame | null {
-    if (!this.grid) return null;
-    try { return JSON.parse(this.grid.render_frame()); } catch { return null; }
+  renderFrame(): Frame | null {
+    if (!this.g) return null;
+    try { return JSON.parse(this.g.render_frame()); } catch { return null; }
   }
   hitTest(x: number, y: number): HitResult | null {
-    if (!this.grid) return null;
-    try { return JSON.parse(this.grid.hit_test(x, y)); } catch { return null; }
+    if (!this.g) return null;
+    try { return JSON.parse(this.g.hit_test(x, y)); } catch { return null; }
   }
   cellScreenRect(r: number, c: number): CellRect | null {
-    if (!this.grid) return null;
-    try { return JSON.parse(this.grid.cell_screen_rect(r, c)); } catch { return null; }
+    if (!this.g) return null;
+    try { return JSON.parse(this.g.cell_screen_rect(r, c)); } catch { return null; }
   }
 }
