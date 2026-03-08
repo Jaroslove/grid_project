@@ -4,54 +4,46 @@
 export class Grid {
     free(): void;
     [Symbol.dispose](): void;
-    add_col_group(label: string, members_json: string, parent_id: number): number;
-    add_row_group(label: string, members_json: string, parent_id: number): number;
+    build_pivot(): void;
     cell_count(): number;
-    cell_screen_rect(row: number, col: number): string;
-    clear_cell(row: number, col: number): void;
+    cell_screen_rect(r: number, c: number): string;
+    clear_cell(r: number, c: number): void;
+    click_h_track(x: number): void;
+    click_v_track(y: number): void;
     edit(r: number, c: number): void;
     edit_col(): number;
     edit_row(): number;
     end_col_resize(): void;
-    get_cell_text(row: number, col: number): string;
+    end_drag(): void;
+    get_cell_text(r: number, c: number): string;
     get_scroll_x(): number;
     get_scroll_y(): number;
-    group_count(): number;
+    get_total_cols(): number;
+    get_total_rows(): number;
     hit_test(cx: number, cy: number): string;
+    is_dragging_scrollbar(): boolean;
     is_resizing(): boolean;
-    load_cells_json(json: string): void;
-    /**
-     * Load data in a simple pivot-table shape.
-     *
-     * Expects JSON like:
-     *   [{ "row": "Row A", "col": "Col 1", "value": 10.0 }, ...]
-     *
-     * It will:
-     * - Clear existing cells and groups.
-     * - Use row index 0 as header row (column labels).
-     * - Use column index 0 as header column (row labels).
-     * - Fill numeric cells with the sum of `value` for each (row, col) pair.
-     */
-    load_pivot_json(json: string): void;
+    load_data(json: string): void;
     move_selection(dr: number, dc: number): void;
-    constructor(vw: number, vh: number);
-    remove_group(group_id: number): void;
+    constructor(w: number, h: number);
     render_frame(): string;
     scroll_by(dx: number, dy: number): void;
     sel_col(): number;
     sel_row(): number;
     select(r: number, c: number): void;
-    set_cell(row: number, col: number, text: string): void;
-    set_cell_style(row: number, col: number, bg: string, fg: string, bold: boolean): void;
-    set_col_width(col: number, w: number): void;
-    set_default_col_width(w: number): void;
-    set_default_row_height(h: number): void;
-    set_row_height(row: number, h: number): void;
+    set_cell(r: number, c: number, t: string): void;
+    set_col_width(c: number, w: number): void;
+    set_pivot_config(json: string): void;
     set_scroll(x: number, y: number): void;
     set_viewport(w: number, h: number): void;
-    start_col_resize(col: number, start_x: number): void;
-    toggle_group(group_id: number): void;
-    update_col_resize(current_x: number): void;
+    start_col_resize(c: number, x: number): void;
+    start_h_drag(x: number): void;
+    start_v_drag(y: number): void;
+    toggle_col_collapse(k: string): void;
+    toggle_row_collapse(k: string): void;
+    update_col_resize(x: number): void;
+    update_h_drag(x: number): void;
+    update_v_drag(y: number): void;
 }
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
@@ -59,46 +51,50 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_grid_free: (a: number, b: number) => void;
-    readonly grid_add_col_group: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
-    readonly grid_add_row_group: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
+    readonly grid_build_pivot: (a: number) => void;
     readonly grid_cell_count: (a: number) => number;
     readonly grid_cell_screen_rect: (a: number, b: number, c: number) => [number, number];
     readonly grid_clear_cell: (a: number, b: number, c: number) => void;
+    readonly grid_click_h_track: (a: number, b: number) => void;
+    readonly grid_click_v_track: (a: number, b: number) => void;
     readonly grid_edit: (a: number, b: number, c: number) => void;
     readonly grid_edit_col: (a: number) => number;
     readonly grid_edit_row: (a: number) => number;
     readonly grid_end_col_resize: (a: number) => void;
+    readonly grid_end_drag: (a: number) => void;
     readonly grid_get_cell_text: (a: number, b: number, c: number) => [number, number];
     readonly grid_get_scroll_x: (a: number) => number;
     readonly grid_get_scroll_y: (a: number) => number;
-    readonly grid_group_count: (a: number) => number;
+    readonly grid_get_total_cols: (a: number) => number;
+    readonly grid_get_total_rows: (a: number) => number;
     readonly grid_hit_test: (a: number, b: number, c: number) => [number, number];
+    readonly grid_is_dragging_scrollbar: (a: number) => number;
     readonly grid_is_resizing: (a: number) => number;
-    readonly grid_load_cells_json: (a: number, b: number, c: number) => void;
-    readonly grid_load_pivot_json: (a: number, b: number, c: number) => void;
+    readonly grid_load_data: (a: number, b: number, c: number) => void;
     readonly grid_move_selection: (a: number, b: number, c: number) => void;
     readonly grid_new: (a: number, b: number) => number;
-    readonly grid_remove_group: (a: number, b: number) => void;
     readonly grid_render_frame: (a: number) => [number, number];
     readonly grid_scroll_by: (a: number, b: number, c: number) => void;
     readonly grid_sel_col: (a: number) => number;
     readonly grid_sel_row: (a: number) => number;
     readonly grid_select: (a: number, b: number, c: number) => void;
     readonly grid_set_cell: (a: number, b: number, c: number, d: number, e: number) => void;
-    readonly grid_set_cell_style: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly grid_set_col_width: (a: number, b: number, c: number) => void;
-    readonly grid_set_default_col_width: (a: number, b: number) => void;
-    readonly grid_set_default_row_height: (a: number, b: number) => void;
-    readonly grid_set_row_height: (a: number, b: number, c: number) => void;
+    readonly grid_set_pivot_config: (a: number, b: number, c: number) => void;
     readonly grid_set_scroll: (a: number, b: number, c: number) => void;
     readonly grid_set_viewport: (a: number, b: number, c: number) => void;
     readonly grid_start_col_resize: (a: number, b: number, c: number) => void;
-    readonly grid_toggle_group: (a: number, b: number) => void;
+    readonly grid_start_h_drag: (a: number, b: number) => void;
+    readonly grid_start_v_drag: (a: number, b: number) => void;
+    readonly grid_toggle_col_collapse: (a: number, b: number, c: number) => void;
+    readonly grid_toggle_row_collapse: (a: number, b: number, c: number) => void;
     readonly grid_update_col_resize: (a: number, b: number) => void;
+    readonly grid_update_h_drag: (a: number, b: number) => void;
+    readonly grid_update_v_drag: (a: number, b: number) => void;
     readonly __wbindgen_externrefs: WebAssembly.Table;
+    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
-    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __wbindgen_start: () => void;
 }
 

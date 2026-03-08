@@ -1,249 +1,154 @@
-import type { RenderFrame, GroupBracket, VisibleHeader } from '../models/grid.models';
+import type { RenderFrame, VBracket, VHeader, VCell, SBar, Metrics } from '../models/grid.models';
 
 export class CanvasRenderer {
   private ctx: CanvasRenderingContext2D;
-  private dpr: number;
+  private dpr = 1;
 
-  // Theme
-  private readonly theme = {
-    bg: '#0F172A',
-    cellBg: '#1E293B',
-    cellBorder: '#334155',
-    headerBg: '#1E293B',
-    headerBorder: '#475569',
-    headerText: '#94A3B8',
-    headerHighlight: '#334155',
-    selectionBorder: '#3B82F6',
-    selectionBg: '#1E3A5F',
-    bracketLine: '#64748B',
-    bracketBtn: '#334155',
-    bracketBtnText: '#E2E8F0',
-    cornerBg: '#0F172A',
-    text: '#E2E8F0',
-    textMuted: '#94A3B8',
+  private readonly T = {
+    bg:'#0F172A', border:'#1e293b',
+    hBg:'#1a2744', hBorder:'#334155', hTxt:'#64748B', hHi:'#334155',
+    selB:'#3B82F6', selBg:'#1E3A5F',
+    bLine:'#475569', bBtn:'#334155', bTxt:'#E2E8F0',
+    corner:'#0F172A', fLine:'#3B82F680',
+    sbTrack:'#0c1322', sbThumb:'#334155', sbCorner:'#0c1322',
+    gtB:'#FBBF2440', stB:'#93C5FD30',
   };
 
-  constructor(
-    private canvas: HTMLCanvasElement
-  ) {
+  constructor(private canvas: HTMLCanvasElement) {
     this.ctx = canvas.getContext('2d', { alpha: false })!;
-    this.dpr = window.devicePixelRatio || 1;
+    this.dpr = devicePixelRatio || 1;
   }
 
-  resize(width: number, height: number): void {
-    this.dpr = window.devicePixelRatio || 1;
-    this.canvas.width = width * this.dpr;
-    this.canvas.height = height * this.dpr;
-    this.canvas.style.width = width + 'px';
-    this.canvas.style.height = height + 'px';
+  resize(w: number, h: number): void {
+    this.dpr = devicePixelRatio || 1;
+    this.canvas.width = w * this.dpr; this.canvas.height = h * this.dpr;
+    this.canvas.style.width = w+'px'; this.canvas.style.height = h+'px';
     this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
   }
 
-  draw(frame: RenderFrame): void {
-    const ctx = this.ctx;
-    const W = this.canvas.width / this.dpr;
-    const H = this.canvas.height / this.dpr;
-    const m = frame.metrics;
-    const ox = m.content_origin_x;
-    const oy = m.content_origin_y;
+  draw(f: RenderFrame): void {
+    const c = this.ctx;
+    const W = this.canvas.width / this.dpr, H = this.canvas.height / this.dpr;
+    const m = f.m; const ox = m.ox, oy = m.oy, fw = m.fw, fh = m.fh, sbs = m.sbs;
+    const dR = W - sbs, dB = H - sbs;
 
-    // Background
-    ctx.fillStyle = this.theme.bg;
-    ctx.fillRect(0, 0, W, H);
+    c.fillStyle = this.T.bg; c.fillRect(0, 0, W, H);
 
-    // ── Cells ─────────────────────────────────────────────
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(ox, oy, W - ox, H - oy);
-    ctx.clip();
+    // data cells
+    c.save(); c.beginPath(); c.rect(ox+fw, oy+fh, dR-ox-fw, dB-oy-fh); c.clip();
+    for (const cl of f.cells) { if (cl.col >= m.fc && cl.row >= m.fr) this.dc(c, cl); }
+    c.restore();
 
-    for (const cell of frame.cells) {
-      // Background
-      ctx.fillStyle = cell.selected ? this.theme.selectionBg : cell.bg;
-      ctx.fillRect(cell.sx, cell.sy, cell.w, cell.h);
+    // frozen cols
+    c.save(); c.beginPath(); c.rect(ox, oy+fh, fw, dB-oy-fh); c.clip();
+    for (const cl of f.cells) { if (cl.col < m.fc && cl.row >= m.fr) this.dc(c, cl); }
+    c.restore();
 
-      // Border
-      ctx.strokeStyle = this.theme.cellBorder;
-      ctx.lineWidth = 0.5;
-      ctx.strokeRect(cell.sx + 0.5, cell.sy + 0.5, cell.w - 1, cell.h - 1);
+    // frozen rows
+    c.save(); c.beginPath(); c.rect(ox+fw, oy, dR-ox-fw, fh); c.clip();
+    for (const cl of f.cells) { if (cl.row < m.fr && cl.col >= m.fc) this.dc(c, cl); }
+    c.restore();
 
-      // Text
-      if (cell.text && !cell.editing) {
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(cell.sx + 4, cell.sy + 1, cell.w - 8, cell.h - 2);
-        ctx.clip();
+    // frozen corner
+    c.save(); c.beginPath(); c.rect(ox, oy, fw, fh); c.clip();
+    for (const cl of f.cells) { if (cl.row < m.fr && cl.col < m.fc) this.dc(c, cl); }
+    c.restore();
 
-        ctx.fillStyle = cell.fg;
-        ctx.font = `${cell.bold ? '600' : '400'} 13px 'Inter', sans-serif`;
-        ctx.textBaseline = 'middle';
-        ctx.textAlign = 'left';
-        ctx.fillText(cell.text, cell.sx + 8, cell.sy + cell.h / 2 + 1);
-        ctx.restore();
-      }
+    // frozen lines
+    if (m.fc > 0) { c.strokeStyle=this.T.fLine; c.lineWidth=1.5; c.beginPath(); c.moveTo(ox+fw+.5,oy); c.lineTo(ox+fw+.5,dB); c.stroke(); }
+    if (m.fr > 0) { c.strokeStyle=this.T.fLine; c.lineWidth=1.5; c.beginPath(); c.moveTo(ox,oy+fh+.5); c.lineTo(dR,oy+fh+.5); c.stroke(); }
 
-      // Selection ring
-      if (cell.selected) {
-        ctx.strokeStyle = this.theme.selectionBorder;
-        ctx.lineWidth = 2;
-        ctx.strokeRect(cell.sx + 1, cell.sy + 1, cell.w - 2, cell.h - 2);
-      }
+    // col headers
+    c.save(); c.beginPath(); c.rect(ox,0,dR-ox,oy); c.clip();
+    for (const h of f.ch) {
+      c.fillStyle = h.highlighted ? this.T.hHi : this.T.hBg;
+      c.fillRect(h.pos,0,h.size,m.chh);
+      c.strokeStyle=this.T.hBorder; c.lineWidth=.5; c.strokeRect(h.pos+.5,.5,h.size-1,m.chh-1);
+      c.fillStyle=this.T.hTxt; c.font="500 9px 'Inter',sans-serif"; c.textAlign='center'; c.textBaseline='middle';
+      c.fillText(h.label, h.pos+h.size/2, m.chh/2+.5);
+      c.fillStyle=this.T.hBorder; c.fillRect(h.pos+h.size-1.5, 3, 1.5, m.chh-6);
     }
-    ctx.restore();
+    c.restore();
 
-    // ── Column headers ────────────────────────────────────
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(ox, oy - m.col_header_height, W - ox, m.col_header_height);
-    ctx.clip();
-
-    for (const h of frame.col_headers) {
-      const y = oy - m.col_header_height;
-      ctx.fillStyle = h.highlighted ? this.theme.headerHighlight : this.theme.headerBg;
-      ctx.fillRect(h.pos, y, h.size, m.col_header_height);
-
-      ctx.strokeStyle = this.theme.headerBorder;
-      ctx.lineWidth = 0.5;
-      ctx.strokeRect(h.pos + 0.5, y + 0.5, h.size - 1, m.col_header_height - 1);
-
-      ctx.fillStyle = this.theme.headerText;
-      ctx.font = "600 11px 'Inter', sans-serif";
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(h.label, h.pos + h.size / 2, y + m.col_header_height / 2 + 1);
-
-      // Resize handle indicator
-      ctx.fillStyle = this.theme.headerBorder;
-      ctx.fillRect(h.pos + h.size - 2, y + 4, 2, m.col_header_height - 8);
+    // row headers
+    const rhx = ox - m.rhw;
+    c.save(); c.beginPath(); c.rect(rhx, oy+fh, m.rhw, dB-oy-fh); c.clip();
+    for (const h of f.rh) {
+      c.fillStyle = h.highlighted ? this.T.hHi : this.T.hBg;
+      c.fillRect(rhx, h.pos, m.rhw, h.size);
+      c.strokeStyle=this.T.hBorder; c.lineWidth=.5; c.strokeRect(rhx+.5, h.pos+.5, m.rhw-1, h.size-1);
+      c.fillStyle=this.T.hTxt; c.font="400 9px 'Inter',sans-serif"; c.textAlign='center'; c.textBaseline='middle';
+      c.fillText(h.label, rhx+m.rhw/2, h.pos+h.size/2+.5);
     }
-    ctx.restore();
+    c.restore();
 
-    // ── Row headers ───────────────────────────────────────
-    const rhX = m.group_rows_depth * m.bracket_size;
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(rhX, oy, m.row_header_width, H - oy);
-    ctx.clip();
-
-    for (const h of frame.row_headers) {
-      ctx.fillStyle = h.highlighted ? this.theme.headerHighlight : this.theme.headerBg;
-      ctx.fillRect(rhX, h.pos, m.row_header_width, h.size);
-
-      ctx.strokeStyle = this.theme.headerBorder;
-      ctx.lineWidth = 0.5;
-      ctx.strokeRect(rhX + 0.5, h.pos + 0.5, m.row_header_width - 1, h.size - 1);
-
-      ctx.fillStyle = this.theme.headerText;
-      ctx.font = "500 11px 'Inter', sans-serif";
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(h.label, rhX + m.row_header_width / 2, h.pos + h.size / 2 + 1);
+    // brackets
+    c.save(); c.beginPath(); c.rect(0, oy+fh, rhx, dB-oy-fh); c.clip();
+    for (const b of f.rb) {
+      const bx = b.depth * m.bs, mid = bx + m.bs/2;
+      const s = Math.max(b.start, oy+fh), e = Math.min(b.end, dB);
+      if (e <= s+4) continue;
+      c.strokeStyle=this.T.bLine; c.lineWidth=1;
+      c.beginPath(); c.moveTo(mid, s+7); c.lineTo(mid, e-7); c.stroke();
+      c.beginPath(); c.moveTo(mid, s+7); c.lineTo(mid+4, s+7); c.stroke();
+      c.beginPath(); c.moveTo(mid, e-7); c.lineTo(mid+4, e-7); c.stroke();
+      const by = Math.max(s+1, Math.min((s+e)/2-6, e-14));
+      this.btn(c, mid-6, by, b.collapsed);
     }
-    ctx.restore();
+    c.restore();
 
-    // ── Row group brackets ────────────────────────────────
-    this.drawRowBrackets(frame.row_brackets, m.bracket_size, oy, H);
+    // corner
+    c.fillStyle=this.T.corner; c.fillRect(0,0,ox,oy);
+    c.strokeStyle=this.T.hBorder; c.lineWidth=.5; c.strokeRect(0,0,ox,oy);
 
-    // ── Column group brackets ─────────────────────────────
-    this.drawColBrackets(frame.col_brackets, m.bracket_size, ox, W);
-
-    // ── Corner ────────────────────────────────────────────
-    ctx.fillStyle = this.theme.cornerBg;
-    ctx.fillRect(0, 0, ox, oy);
-    ctx.strokeStyle = this.theme.headerBorder;
-    ctx.lineWidth = 0.5;
-    ctx.strokeRect(0, 0, ox, oy);
+    // scrollbars
+    this.sb(c, f.hs, false); this.sb(c, f.vs, true);
+    c.fillStyle=this.T.sbCorner; c.fillRect(W-sbs, H-sbs, sbs, sbs);
   }
 
-  private drawRowBrackets(brackets: GroupBracket[], bracketSize: number, oy: number, H: number): void {
-    const ctx = this.ctx;
+  private dc(c: CanvasRenderingContext2D, cl: VCell): void {
+    const {sx,sy,w,h} = cl;
+    c.fillStyle = cl.bg; c.fillRect(sx,sy,w,h);
+    c.strokeStyle=this.T.border; c.lineWidth=.5; c.strokeRect(sx+.5,sy+.5,w-1,h-1);
 
-    for (const b of brackets) {
-      const x = b.depth * bracketSize;
-      const midX = x + bracketSize / 2;
-      const startY = Math.max(b.start, oy);
-      const endY = Math.min(b.end, H);
-      if (endY <= startY) continue;
-
-      // Vertical line
-      ctx.strokeStyle = this.theme.bracketLine;
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.moveTo(midX, startY + 6);
-      ctx.lineTo(midX, endY - 6);
-      ctx.stroke();
-
-      // Ticks
-      ctx.beginPath();
-      ctx.moveTo(midX, startY + 6);
-      ctx.lineTo(midX + 5, startY + 6);
-      ctx.stroke();
-
-      ctx.beginPath();
-      ctx.moveTo(midX, endY - 6);
-      ctx.lineTo(midX + 5, endY - 6);
-      ctx.stroke();
-
-      // Button
-      const btnY = Math.max(startY, Math.min((startY + endY) / 2 - 7, endY - 14));
-      this.drawGroupButton(midX - 7, btnY, b.collapsed);
+    if (cl.cell_type === 4) { // grand total
+      c.strokeStyle=this.T.gtB; c.lineWidth=1; c.strokeRect(sx+.5,sy+.5,w-1,h-1);
+      c.strokeStyle='#FBBF24'; c.lineWidth=1.5; c.beginPath(); c.moveTo(sx,sy+.5); c.lineTo(sx+w,sy+.5); c.stroke();
+    } else if (cl.cell_type === 3) { // subtotal
+      c.strokeStyle=this.T.stB; c.lineWidth=.5; c.strokeRect(sx+.5,sy+.5,w-1,h-1);
+      c.strokeStyle='#93C5FD40'; c.lineWidth=1; c.beginPath(); c.moveTo(sx,sy+.5); c.lineTo(sx+w,sy+.5); c.stroke();
     }
+
+    if (cl.text && !cl.editing) {
+      c.save(); c.beginPath(); c.rect(sx+2,sy+1,w-4,h-2); c.clip();
+      c.fillStyle=cl.fg;
+      const fw = cl.bold ? '600' : '400';
+      const fs = cl.cell_type===4?'12px':cl.cell_type===1?'10px':'11px';
+      c.font = `${fw} ${fs} 'Inter',-apple-system,sans-serif`;
+      c.textBaseline='middle'; const ty = sy+h/2+.5; const p = 6;
+      if (cl.text_align===2) { c.textAlign='right'; c.fillText(cl.text, sx+w-p, ty); }
+      else if (cl.text_align===1) { c.textAlign='center'; c.fillText(cl.text, sx+w/2, ty); }
+      else { c.textAlign='left'; c.fillText(cl.text, sx+p+(cl.indent||0), ty); }
+      c.restore();
+    }
+    if (cl.selected) { c.strokeStyle=this.T.selB; c.lineWidth=2; c.strokeRect(sx+1,sy+1,w-2,h-2); }
   }
 
-  private drawColBrackets(brackets: GroupBracket[], bracketSize: number, ox: number, W: number): void {
-    const ctx = this.ctx;
-
-    for (const b of brackets) {
-      const y = b.depth * bracketSize;
-      const midY = y + bracketSize / 2;
-      const startX = Math.max(b.start, ox);
-      const endX = Math.min(b.end, W);
-      if (endX <= startX) continue;
-
-      ctx.strokeStyle = this.theme.bracketLine;
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.moveTo(startX + 6, midY);
-      ctx.lineTo(endX - 6, midY);
-      ctx.stroke();
-
-      ctx.beginPath();
-      ctx.moveTo(startX + 6, midY);
-      ctx.lineTo(startX + 6, midY + 5);
-      ctx.stroke();
-
-      ctx.beginPath();
-      ctx.moveTo(endX - 6, midY);
-      ctx.lineTo(endX - 6, midY + 5);
-      ctx.stroke();
-
-      const btnX = Math.max(startX, Math.min((startX + endX) / 2 - 7, endX - 14));
-      this.drawGroupButton(btnX, midY - 7, b.collapsed);
-    }
+  private sb(c: CanvasRenderingContext2D, s: SBar, vert: boolean): void {
+    if (!s.visible) return;
+    c.fillStyle=this.T.sbTrack; c.fillRect(s.tx,s.ty,s.tw,s.th);
+    c.strokeStyle=this.T.hBorder; c.lineWidth=.5;
+    if (vert) { c.beginPath(); c.moveTo(s.tx+.5,s.ty); c.lineTo(s.tx+.5,s.ty+s.th); c.stroke(); }
+    else { c.beginPath(); c.moveTo(s.tx,s.ty+.5); c.lineTo(s.tx+s.tw,s.ty+.5); c.stroke(); }
+    const p = 2, r = 3;
+    c.fillStyle=this.T.sbThumb; c.beginPath(); c.roundRect(s.bx+p,s.by+p,s.bw-p*2,s.bh-p*2,r); c.fill();
   }
 
-  private drawGroupButton(x: number, y: number, collapsed: boolean): void {
-    const ctx = this.ctx;
-    const size = 14;
-    const r = 3;
-
-    // Rounded rect background
-    ctx.fillStyle = this.theme.bracketBtn;
-    ctx.beginPath();
-    ctx.roundRect(x, y, size, size, r);
-    ctx.fill();
-
-    ctx.strokeStyle = this.theme.bracketLine;
-    ctx.lineWidth = 0.5;
-    ctx.beginPath();
-    ctx.roundRect(x, y, size, size, r);
-    ctx.stroke();
-
-    // Symbol
-    ctx.fillStyle = this.theme.bracketBtnText;
-    ctx.font = "bold 11px 'Inter', monospace";
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(collapsed ? '+' : '−', x + size / 2, y + size / 2 + 1);
+  private btn(c: CanvasRenderingContext2D, x: number, y: number, col: boolean): void {
+    const s=12,r=2;
+    c.fillStyle=this.T.bBtn; c.beginPath(); c.roundRect(x,y,s,s,r); c.fill();
+    c.strokeStyle=this.T.bLine; c.lineWidth=.5; c.beginPath(); c.roundRect(x,y,s,s,r); c.stroke();
+    c.fillStyle=this.T.bTxt; c.font="bold 10px 'Inter',monospace"; c.textAlign='center'; c.textBaseline='middle';
+    c.fillText(col?'+':'−', x+s/2, y+s/2+.5);
   }
 }

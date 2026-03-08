@@ -1,841 +1,1033 @@
 use wasm_bindgen::prelude::*;
 use serde::{Serialize, Deserialize};
-use std::collections::{HashMap, BTreeMap};
+use std::collections::{HashMap, BTreeMap, BTreeSet};
 
-// ─── Cell ────────────────────────────────────────────────────────────
+#[derive(Clone, Copy, Serialize, Deserialize, Debug, PartialEq)]
+pub enum AggFunc { Sum, Count, Average, Min, Max }
 
-#[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct CellData {
-    pub text: String,
-    pub bg_color: Option<String>,
-    pub fg_color: Option<String>,
-    pub bold: bool,
-}
-
-impl Default for CellData {
-    fn default() -> Self {
-        Self {
-            text: String::new(),
-            bg_color: None,
-            fg_color: None,
-            bold: false,
+impl AggFunc {
+    fn apply(&self, vals: &[f64]) -> f64 {
+        if vals.is_empty() { return 0.0; }
+        match self {
+            AggFunc::Sum => vals.iter().sum(),
+            AggFunc::Count => vals.len() as f64,
+            AggFunc::Average => vals.iter().sum::<f64>() / vals.len() as f64,
+            AggFunc::Min => vals.iter().cloned().fold(f64::INFINITY, f64::min),
+            AggFunc::Max => vals.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+        }
+    }
+    fn label(&self) -> &str {
+        match self {
+            AggFunc::Sum => "Sum", AggFunc::Count => "Count",
+            AggFunc::Average => "Avg", AggFunc::Min => "Min", AggFunc::Max => "Max",
         }
     }
 }
 
-// Simple pivot input record: one row key, one column key, and a numeric value.
-#[derive(Deserialize, Debug)]
-struct PivotRecord {
-    row: String,
-    col: String,
-    value: f64,
-}
-
-// ─── Group ───────────────────────────────────────────────────────────
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct PivotField { pub name: String }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct Group {
-    pub id: u32,
-    pub label: String,
-    pub members: Vec<u32>,
-    pub collapsed: bool,
-    pub depth: u32,
-    pub parent: Option<u32>,
+pub struct ValueField {
+    pub name: String, pub agg: AggFunc, pub label: Option<String>,
+}
+impl ValueField {
+    fn display_label(&self) -> String {
+        self.label.clone().unwrap_or_else(|| format!("{} of {}", self.agg.label(), self.name))
+    }
 }
 
-// ─── Render output types ─────────────────────────────────────────────
-
-#[derive(Serialize, Debug)]
-pub struct VisibleCell {
-    pub sx: f64,
-    pub sy: f64,
-    pub w: f64,
-    pub h: f64,
-    pub text: String,
-    pub bg: String,
-    pub fg: String,
-    pub bold: bool,
-    pub row: u32,
-    pub col: u32,
-    pub selected: bool,
-    pub editing: bool,
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct PivotConfig {
+    pub row_fields: Vec<PivotField>,
+    pub col_fields: Vec<PivotField>,
+    pub value_fields: Vec<ValueField>,
+    pub show_row_subtotals: bool,
+    pub show_col_subtotals: bool,
+    pub show_grand_totals: bool,
 }
 
-#[derive(Serialize, Debug)]
-pub struct VisibleHeader {
-    pub pos: f64,
-    pub size: f64,
-    pub label: String,
-    pub index: u32,
-    pub highlighted: bool,
+#[derive(Clone, Debug)]
+struct RawRecord {
+    strings: HashMap<String, String>,
+    numbers: HashMap<String, f64>,
 }
 
-#[derive(Serialize, Debug)]
-pub struct GroupBracket {
-    pub id: u32,
-    pub label: String,
-    pub start: f64,
-    pub end: f64,
-    pub depth: u32,
-    pub collapsed: bool,
-    pub is_row: bool,
+#[derive(Clone, Debug)]
+struct PivotNode {
+    key: String,
+    full_key: Vec<String>,
+    depth: usize,
+    children: Vec<usize>,
+    is_subtotal: bool,
+    is_grand_total: bool,
+    collapsed: bool,
+    grid_index: Option<u32>,
 }
 
-#[derive(Serialize, Debug)]
-pub struct GridMetrics {
-    pub row_header_width: f64,
-    pub col_header_height: f64,
-    pub group_cols_depth: u32,
-    pub group_rows_depth: u32,
-    pub bracket_size: f64,
-    pub content_origin_x: f64,
-    pub content_origin_y: f64,
+#[derive(Clone, Debug, Default)]
+struct CellData {
+    text: String,
+    bg: Option<String>,
+    fg: Option<String>,
+    bold: bool,
+    is_header: bool,
+    is_subtotal: bool,
+    is_grand_total: bool,
+    is_value: bool,
 }
 
-#[derive(Serialize, Debug)]
-pub struct RenderFrame {
-    pub cells: Vec<VisibleCell>,
-    pub col_headers: Vec<VisibleHeader>,
-    pub row_headers: Vec<VisibleHeader>,
-    pub row_brackets: Vec<GroupBracket>,
-    pub col_brackets: Vec<GroupBracket>,
-    pub metrics: GridMetrics,
+// ─── Render types ────────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct VCell {
+    pub sx: f64, pub sy: f64, pub w: f64, pub h: f64,
+    pub text: String, pub bg: String, pub fg: String,
+    pub bold: bool, pub row: u32, pub col: u32,
+    pub selected: bool, pub editing: bool,
+    pub cell_type: u8,   // 0=empty 1=header 2=value 3=subtotal 4=grand_total
+    pub text_align: u8,  // 0=left 1=center 2=right
+    pub indent: f64,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct HitResult {
+#[derive(Serialize)]
+pub struct VHeader {
+    pub pos: f64, pub size: f64, pub label: String,
+    pub index: u32, pub highlighted: bool,
+}
+
+#[derive(Serialize)]
+pub struct VBracket {
+    pub id: u32, pub label: String,
+    pub start: f64, pub end: f64,
+    pub depth: u32, pub collapsed: bool,
+}
+
+#[derive(Serialize)]
+pub struct SBar {
+    pub visible: bool,
+    pub tx: f64, pub ty: f64, pub tw: f64, pub th: f64,
+    pub bx: f64, pub by: f64, pub bw: f64, pub bh: f64,
+}
+
+#[derive(Serialize)]
+pub struct Metrics {
+    pub ox: f64, pub oy: f64,
+    pub fw: f64, pub fh: f64,
+    pub fc: u32, pub fr: u32,
+    pub rhw: f64, pub chh: f64,
+    pub bd: u32, pub bs: f64, pub sbs: f64,
+}
+
+#[derive(Serialize)]
+pub struct Frame {
+    pub cells: Vec<VCell>,
+    pub ch: Vec<VHeader>,
+    pub rh: Vec<VHeader>,
+    pub rb: Vec<VBracket>,
+    pub m: Metrics,
+    pub hs: SBar,
+    pub vs: SBar,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Hit {
     #[serde(rename = "type")]
-    pub hit_type: String,
-    pub row: Option<u32>,
-    pub col: Option<u32>,
-    pub group_id: Option<u32>,
+    pub t: String,
+    pub r: Option<u32>,
+    pub c: Option<u32>,
+    pub k: Option<String>,
 }
 
-// ─── Grid State ──────────────────────────────────────────────────────
+/// Pre-indexed aggregation bucket.
+/// Key = (row_key_joined, col_key_joined)
+/// Value = Vec<f64> per value field
+type AggIndex = HashMap<(String, String), Vec<Vec<f64>>>;
+
+// ─── Grid ────────────────────────────────────────────────────
 
 #[wasm_bindgen]
 pub struct Grid {
+    records: Vec<RawRecord>,
+    config: Option<PivotConfig>,
+
     cells: HashMap<(u32, u32), CellData>,
-    col_widths: BTreeMap<u32, f64>,
-    row_heights: BTreeMap<u32, f64>,
-    default_col_width: f64,
-    default_row_height: f64,
+    cw: BTreeMap<u32, f64>,
+    rh_map: BTreeMap<u32, f64>,
+    dcw: f64, drh: f64,
 
-    scroll_x: f64,
-    scroll_y: f64,
-    viewport_w: f64,
-    viewport_h: f64,
+    sx: f64, sy: f64,
+    vw: f64, vh: f64,
 
-    row_groups: Vec<Group>,
-    col_groups: Vec<Group>,
-    next_group_id: u32,
+    rnodes: Vec<PivotNode>,
+    rroots: Vec<usize>,
+    cnodes: Vec<PivotNode>,
+    croots: Vec<usize>,
 
-    hidden_rows: Vec<bool>,
-    hidden_cols: Vec<bool>,
-    hidden_dirty: bool,
+    tr: u32, tc: u32,
+    fc: u32, fr: u32,
 
-    sel_row: i32,
-    sel_col: i32,
-    edit_row: i32,
-    edit_col: i32,
+    crow: BTreeSet<String>,
+    ccol: BTreeSet<String>,
 
-    row_header_width: f64,
-    col_header_height: f64,
-    bracket_size: f64,
+    // cached
+    cntw: f64, cnth: f64,
+    frzw: f64, frzh: f64,
+    sz_dirty: bool,
 
-    // Column resize tracking
-    resize_col: i32,
-    resize_start_x: f64,
-    resize_start_width: f64,
+    sel_r: i32, sel_c: i32,
+    ed_r: i32, ed_c: i32,
+
+    rhw: f64, chh: f64,
+    bs: f64, sbs: f64, mt: f64,
+
+    rcol: i32, rsx: f64, rsw: f64,
+    dh: bool, dv: bool, doff: f64,
+
+    dirty: bool,
 }
 
 #[wasm_bindgen]
 impl Grid {
     #[wasm_bindgen(constructor)]
-    pub fn new(vw: f64, vh: f64) -> Self {
+    pub fn new(w: f64, h: f64) -> Self {
         Self {
+            records: Vec::new(), config: None,
             cells: HashMap::new(),
-            col_widths: BTreeMap::new(),
-            row_heights: BTreeMap::new(),
-            default_col_width: 120.0,
-            default_row_height: 30.0,
-            scroll_x: 0.0,
-            scroll_y: 0.0,
-            viewport_w: vw,
-            viewport_h: vh,
-            row_groups: Vec::new(),
-            col_groups: Vec::new(),
-            next_group_id: 1,
-            hidden_rows: Vec::new(),
-            hidden_cols: Vec::new(),
-            hidden_dirty: true,
-            sel_row: -1,
-            sel_col: -1,
-            edit_row: -1,
-            edit_col: -1,
-            row_header_width: 60.0,
-            col_header_height: 28.0,
-            bracket_size: 20.0,
-            resize_col: -1,
-            resize_start_x: 0.0,
-            resize_start_width: 0.0,
+            cw: BTreeMap::new(), rh_map: BTreeMap::new(),
+            dcw: 90.0, drh: 24.0,
+            sx: 0.0, sy: 0.0, vw: w, vh: h,
+            rnodes: Vec::new(), rroots: Vec::new(),
+            cnodes: Vec::new(), croots: Vec::new(),
+            tr: 0, tc: 0, fc: 0, fr: 0,
+            crow: BTreeSet::new(), ccol: BTreeSet::new(),
+            cntw: 0.0, cnth: 0.0, frzw: 0.0, frzh: 0.0,
+            sz_dirty: true,
+            sel_r: -1, sel_c: -1, ed_r: -1, ed_c: -1,
+            rhw: 40.0, chh: 20.0, bs: 16.0, sbs: 12.0, mt: 20.0,
+            rcol: -1, rsx: 0.0, rsw: 0.0,
+            dh: false, dv: false, doff: 0.0,
+            dirty: false,
         }
     }
 
-    // ─── Cell ops ────────────────────────────────────────────────
-
-    pub fn set_cell(&mut self, row: u32, col: u32, text: &str) {
-        let test = "test".to_string();
-        let value = format!("{}_{}", test, text);
-        self.cells.entry((row, col)).or_default().text = text.to_string();
+    pub fn load_data(&mut self, json: &str) {
+        // Parse into optimized format
+        if let Ok(raw) = serde_json::from_str::<Vec<HashMap<String, serde_json::Value>>>(json) {
+            self.records = raw.into_iter().map(|m| {
+                let mut strings = HashMap::new();
+                let mut numbers = HashMap::new();
+                for (k, v) in m {
+                    match v {
+                        serde_json::Value::String(s) => { strings.insert(k, s); }
+                        serde_json::Value::Number(n) => {
+                            if let Some(f) = n.as_f64() {
+                                numbers.insert(k.clone(), f);
+                            }
+                            strings.insert(k, n.to_string());
+                        }
+                        _ => { strings.insert(k, v.to_string()); }
+                    }
+                }
+                RawRecord { strings, numbers }
+            }).collect();
+            self.dirty = true; self.sz_dirty = true;
+        }
     }
 
-    pub fn set_cell_style(&mut self, row: u32, col: u32, bg: &str, fg: &str, bold: bool) {
-        let entry = self.cells.entry((row, col)).or_default();
-        if !bg.is_empty() { entry.bg_color = Some(bg.to_string()); }
-        if !fg.is_empty() { entry.fg_color = Some(fg.to_string()); }
-        entry.bold = bold;
+    pub fn set_pivot_config(&mut self, json: &str) {
+        if let Ok(c) = serde_json::from_str::<PivotConfig>(json) {
+            self.config = Some(c);
+            self.dirty = true; self.sz_dirty = true;
+        }
     }
 
-    pub fn get_cell_text(&self, row: u32, col: u32) -> String {
-        self.cells.get(&(row, col)).map(|c| c.text.clone()).unwrap_or_default()
+    pub fn build_pivot(&mut self) {
+        let cfg = match &self.config { Some(c) => c.clone(), None => return };
+        if self.records.is_empty() { return; }
+
+        self.cells.clear();
+        self.rnodes.clear(); self.rroots.clear();
+        self.cnodes.clear(); self.croots.clear();
+        self.sel_r = -1; self.sel_c = -1;
+        self.ed_r = -1; self.ed_c = -1;
+
+        let nv = cfg.value_fields.len().max(1) as u32;
+
+        // Build trees
+        {
+            let recs = &self.records;
+            let mut nodes = Vec::new();
+            let roots = build_tree(recs, &cfg.row_fields, &mut nodes,
+                cfg.show_row_subtotals, cfg.show_grand_totals, &self.crow);
+            self.rnodes = nodes;
+            self.rroots = roots;
+        }
+        {
+            let recs = &self.records;
+            let mut nodes = Vec::new();
+            let roots = build_tree(recs, &cfg.col_fields, &mut nodes,
+                cfg.show_col_subtotals, cfg.show_grand_totals, &self.ccol);
+            self.cnodes = nodes;
+            self.croots = roots;
+        }
+
+        self.fc = cfg.row_fields.len().max(1) as u32;
+        self.fr = if cfg.col_fields.is_empty() { 1 } else { cfg.col_fields.len() as u32 + 1 };
+
+        let mut ri = self.fr;
+        let rr = self.rroots.clone();
+        assign_rows(&mut self.rnodes, &rr, &mut ri);
+        let mut ci = self.fc;
+        let cr = self.croots.clone();
+        assign_cols(&mut self.cnodes, &cr, nv, &mut ci);
+        self.tr = ri; self.tc = ci;
+
+        // Write headers
+        write_headers(&cfg, self.fr, &mut self.cells);
+        write_row_labels(&self.rnodes, self.fc, self.fr, &mut self.cells);
+        write_col_labels(&self.cnodes, &cfg, self.fr, &mut self.cells);
+
+        // ── Pre-index records for fast aggregation ──
+        let agg_idx = build_agg_index(&self.records, &cfg);
+
+        // ── Write data cells using index ──
+        write_data_indexed(&self.rnodes, &self.cnodes, &self.croots,
+            &cfg, &agg_idx, &mut self.cells);
+
+        // Style
+        style_cells(&mut self.cells, self.fr, self.fc);
+        init_col_widths(&mut self.cw, self.fc, self.tc, self.dcw);
+
+        self.dirty = false;
+        self.sz_dirty = true;
+        self.recompute();
+        self.clamp();
     }
 
-    pub fn clear_cell(&mut self, row: u32, col: u32) {
-        self.cells.remove(&(row, col));
+    fn recompute(&mut self) {
+        if !self.sz_dirty { return; }
+        self.frzw = (0..self.fc).map(|c| self.colw(c)).sum();
+        self.frzh = (0..self.fr).map(|r| self.rowh(r)).sum();
+        self.cntw = (self.fc..self.tc).map(|c| self.colw(c)).sum();
+        self.cnth = (self.fr..self.tr).map(|r| self.rowh(r)).sum();
+        self.sz_dirty = false;
     }
 
-    pub fn load_cells_json(&mut self, json: &str) {
-        if let Ok(data) = serde_json::from_str::<Vec<(u32, u32, String)>>(json) {
-            for (r, c, t) in data {
-                self.set_cell(r, c, &t);
+    fn dvw(&self) -> f64 {
+        let o = self.origin_x();
+        (self.vw - o - self.frzw - self.sbs).max(1.0)
+    }
+    fn dvh(&self) -> f64 {
+        let o = self.origin_y();
+        (self.vh - o - self.frzh - self.sbs).max(1.0)
+    }
+    fn msx(&self) -> f64 { (self.cntw - self.dvw()).max(0.0) }
+    fn msy(&self) -> f64 { (self.cnth - self.dvh()).max(0.0) }
+    fn clamp(&mut self) {
+        self.sx = self.sx.max(0.0).min(self.msx());
+        self.sy = self.sy.max(0.0).min(self.msy());
+    }
+
+    fn colw(&self, c: u32) -> f64 { *self.cw.get(&c).unwrap_or(&self.dcw) }
+    fn rowh(&self, r: u32) -> f64 { *self.rh_map.get(&r).unwrap_or(&self.drh) }
+
+    fn bdepth(&self) -> u32 {
+        self.rnodes.iter()
+            .filter(|n| !n.children.is_empty() && !n.is_subtotal && !n.is_grand_total)
+            .map(|n| n.depth as u32 + 1).max().unwrap_or(0)
+    }
+
+    fn origin_x(&self) -> f64 { self.bdepth() as f64 * self.bs + self.rhw }
+    fn origin_y(&self) -> f64 { self.chh }
+
+    fn scol_px(&self, c: u32) -> f64 { (self.fc..c).map(|i| self.colw(i)).sum() }
+    fn srow_px(&self, r: u32) -> f64 { (self.fr..r).map(|i| self.rowh(i)).sum() }
+    fn fcol_px(&self, c: u32) -> f64 { (0..c.min(self.fc)).map(|i| self.colw(i)).sum() }
+    fn frow_px(&self, r: u32) -> f64 { (0..r.min(self.fr)).map(|i| self.rowh(i)).sum() }
+
+    fn last_desc(&self, i: usize) -> Option<u32> {
+        let n = &self.rnodes[i];
+        if n.children.is_empty() || n.collapsed { return n.grid_index; }
+        let mut last = n.grid_index;
+        for &ci in &n.children {
+            if let Some(l) = self.last_desc(ci) {
+                match last { Some(p) if l > p => last = Some(l), None => last = Some(l), _ => {} }
             }
         }
+        last
     }
 
-    /// Load data in a simple pivot-table shape.
-    ///
-    /// Expects JSON like:
-    ///   [{ "row": "Row A", "col": "Col 1", "value": 10.0 }, ...]
-    ///
-    /// It will:
-    /// - Clear existing cells and groups.
-    /// - Use row index 0 as header row (column labels).
-    /// - Use column index 0 as header column (row labels).
-    /// - Fill numeric cells with the sum of `value` for each (row, col) pair.
-    pub fn load_pivot_json(&mut self, json: &str) {
-        let records: Vec<PivotRecord> = match serde_json::from_str(json) {
-            Ok(v) => v,
-            Err(_) => return,
-        };
-
-        // Reset grid content but keep sizing/viewport.
-        self.cells.clear();
-        self.row_groups.clear();
-        self.col_groups.clear();
-        self.hidden_rows.clear();
-        self.hidden_cols.clear();
-        self.hidden_dirty = true;
-        self.sel_row = -1;
-        self.sel_col = -1;
-        self.edit_row = -1;
-        self.edit_col = -1;
-
-        // Map row/col labels to indices. Reserve 0 for headers.
-        let mut row_index: BTreeMap<String, u32> = BTreeMap::new();
-        let mut col_index: BTreeMap<String, u32> = BTreeMap::new();
-        let mut next_row: u32 = 1;
-        let mut next_col: u32 = 1;
-
-        let mut agg: HashMap<(u32, u32), f64> = HashMap::new();
-
-        for rec in records {
-            let r = *row_index.entry(rec.row).or_insert_with(|| {
-                let idx = next_row;
-                next_row += 1;
-                idx
-            });
-            let c = *col_index.entry(rec.col).or_insert_with(|| {
-                let idx = next_col;
-                next_col += 1;
-                idx
-            });
-
-            *agg.entry((r, c)).or_insert(0.0) += rec.value;
-        }
-
-        // Header row: column labels in row 0, columns 1..N
-        for (label, c) in &col_index {
-            self.set_cell(0, *c, label);
-        }
-
-        // Header column: row labels in column 0, rows 1..M
-        for (label, r) in &row_index {
-            self.set_cell(*r, 0, label);
-        }
-
-        // Data cells: aggregated values
-        for ((r, c), val) in agg {
-            self.set_cell(r, c, &format!("{}", val));
-        }
+    fn hsb(&self) -> SBar {
+        let dvw = self.dvw();
+        if self.cntw <= dvw { return SBar { visible:false, tx:0.0,ty:0.0,tw:0.0,th:0.0,bx:0.0,by:0.0,bw:0.0,bh:0.0 }; }
+        let ox = self.origin_x();
+        let tx = ox; let ty = self.vh - self.sbs;
+        let tw = self.vw - ox - self.sbs; let th = self.sbs;
+        let r = dvw / self.cntw;
+        let bw = (tw * r).max(self.mt).min(tw);
+        let ms = self.msx();
+        let f = if ms > 0.0 { self.sx / ms } else { 0.0 };
+        SBar { visible:true, tx,ty,tw,th, bx: tx + f*(tw-bw), by:ty, bw, bh:th }
     }
 
-    // ─── Sizing ──────────────────────────────────────────────────
-
-    pub fn set_col_width(&mut self, col: u32, w: f64) {
-        self.col_widths.insert(col, w.max(30.0));
+    fn vsb(&self) -> SBar {
+        let dvh = self.dvh();
+        if self.cnth <= dvh { return SBar { visible:false, tx:0.0,ty:0.0,tw:0.0,th:0.0,bx:0.0,by:0.0,bw:0.0,bh:0.0 }; }
+        let oy = self.origin_y();
+        let tx = self.vw - self.sbs; let ty = oy;
+        let tw = self.sbs; let th = self.vh - oy - self.sbs;
+        let r = dvh / self.cnth;
+        let bh = (th * r).max(self.mt).min(th);
+        let ms = self.msy();
+        let f = if ms > 0.0 { self.sy / ms } else { 0.0 };
+        SBar { visible:true, tx,ty,tw,th, bx:tx, by: ty + f*(th-bh), bw:tw, bh }
     }
 
-    pub fn set_row_height(&mut self, row: u32, h: f64) {
-        self.row_heights.insert(row, h.max(14.0));
+    fn ensure(&mut self) {
+        if self.dirty { self.build_pivot(); }
+        self.recompute();
     }
 
-    pub fn set_default_col_width(&mut self, w: f64) { self.default_col_width = w.max(30.0); }
-    pub fn set_default_row_height(&mut self, h: f64) { self.default_row_height = h.max(14.0); }
+    // ─── public API ──────────────────────────────────────────
 
-    fn col_w(&self, c: u32) -> f64 {
-        *self.col_widths.get(&c).unwrap_or(&self.default_col_width)
-    }
-    fn row_h(&self, r: u32) -> f64 {
-        *self.row_heights.get(&r).unwrap_or(&self.default_row_height)
-    }
-
-    // ─── Scroll / viewport ───────────────────────────────────────
-
-    pub fn set_viewport(&mut self, w: f64, h: f64) {
-        self.viewport_w = w;
-        self.viewport_h = h;
-    }
+    pub fn set_viewport(&mut self, w: f64, h: f64) { self.vw = w; self.vh = h; self.recompute(); self.clamp(); }
 
     pub fn scroll_by(&mut self, dx: f64, dy: f64) {
-        self.scroll_x = (self.scroll_x + dx).max(0.0);
-        self.scroll_y = (self.scroll_y + dy).max(0.0);
+        self.ensure(); self.sx += dx; self.sy += dy; self.clamp();
     }
-
     pub fn set_scroll(&mut self, x: f64, y: f64) {
-        self.scroll_x = x.max(0.0);
-        self.scroll_y = y.max(0.0);
+        self.ensure(); self.sx = x; self.sy = y; self.clamp();
     }
+    pub fn get_scroll_x(&self) -> f64 { self.sx }
+    pub fn get_scroll_y(&self) -> f64 { self.sy }
 
-    pub fn get_scroll_x(&self) -> f64 { self.scroll_x }
-    pub fn get_scroll_y(&self) -> f64 { self.scroll_y }
+    pub fn select(&mut self, r: i32, c: i32) { self.sel_r = r; self.sel_c = c; }
+    pub fn sel_row(&self) -> i32 { self.sel_r }
+    pub fn sel_col(&self) -> i32 { self.sel_c }
+    pub fn edit(&mut self, r: i32, c: i32) { self.ed_r = r; self.ed_c = c; }
+    pub fn edit_row(&self) -> i32 { self.ed_r }
+    pub fn edit_col(&self) -> i32 { self.ed_c }
 
-    // ─── Selection / editing ─────────────────────────────────────
+    pub fn set_cell(&mut self, r: u32, c: u32, t: &str) { self.cells.entry((r,c)).or_default().text = t.into(); }
+    pub fn get_cell_text(&self, r: u32, c: u32) -> String { self.cells.get(&(r,c)).map(|d| d.text.clone()).unwrap_or_default() }
+    pub fn clear_cell(&mut self, r: u32, c: u32) { self.cells.remove(&(r,c)); }
 
-    pub fn select(&mut self, r: i32, c: i32) { self.sel_row = r; self.sel_col = c; }
-    pub fn sel_row(&self) -> i32 { self.sel_row }
-    pub fn sel_col(&self) -> i32 { self.sel_col }
-
-    pub fn edit(&mut self, r: i32, c: i32) { self.edit_row = r; self.edit_col = c; }
-    pub fn edit_row(&self) -> i32 { self.edit_row }
-    pub fn edit_col(&self) -> i32 { self.edit_col }
+    pub fn set_col_width(&mut self, c: u32, w: f64) { self.cw.insert(c, w.max(30.0)); self.sz_dirty = true; }
 
     pub fn move_selection(&mut self, dr: i32, dc: i32) {
-        if self.sel_row < 0 { self.sel_row = 0; }
-        if self.sel_col < 0 { self.sel_col = 0; }
-        self.sel_row = (self.sel_row + dr).max(0);
-        self.sel_col = (self.sel_col + dc).max(0);
-
-        // Skip hidden rows/cols
-        self.rebuild_hidden();
-        while self.is_row_hidden(self.sel_row as u32) && self.sel_row >= 0 {
-            self.sel_row += if dr >= 0 { 1 } else { -1 };
-        }
-        while self.is_col_hidden(self.sel_col as u32) && self.sel_col >= 0 {
-            self.sel_col += if dc >= 0 { 1 } else { -1 };
-        }
-        self.sel_row = self.sel_row.max(0);
-        self.sel_col = self.sel_col.max(0);
-
-        self.ensure_visible(self.sel_row as u32, self.sel_col as u32);
+        self.ensure();
+        if self.sel_r < 0 { self.sel_r = 0; }
+        if self.sel_c < 0 { self.sel_c = 0; }
+        self.sel_r = (self.sel_r+dr).max(0).min(self.tr as i32-1);
+        self.sel_c = (self.sel_c+dc).max(0).min(self.tc as i32-1);
+        self.ensure_vis(self.sel_r as u32, self.sel_c as u32);
     }
 
-    /// Scroll so that the given cell is visible
-    fn ensure_visible(&mut self, row: u32, col: u32) {
-        let metrics = self.metrics();
-        let ox = metrics.content_origin_x;
-        let oy = metrics.content_origin_y;
-        let cw = self.viewport_w - ox;
-        let ch = self.viewport_h - oy;
-
-        // Column
-        let col_start = self.col_pixel(col);
-        let col_end = col_start + self.col_w(col);
-        if col_start < self.scroll_x {
-            self.scroll_x = col_start;
-        } else if col_end > self.scroll_x + cw {
-            self.scroll_x = col_end - cw;
+    fn ensure_vis(&mut self, r: u32, c: u32) {
+        self.recompute();
+        if c >= self.fc {
+            let cs = self.scol_px(c); let ce = cs + self.colw(c);
+            let vw = self.dvw();
+            if cs < self.sx { self.sx = cs; }
+            else if ce > self.sx + vw { self.sx = ce - vw; }
         }
+        if r >= self.fr {
+            let rs = self.srow_px(r); let re = rs + self.rowh(r);
+            let vh = self.dvh();
+            if rs < self.sy { self.sy = rs; }
+            else if re > self.sy + vh { self.sy = re - vh; }
+        }
+        self.clamp();
+    }
 
-        // Row
-        let row_start = self.row_pixel(row);
-        let row_end = row_start + self.row_h(row);
-        if row_start < self.scroll_y {
-            self.scroll_y = row_start;
-        } else if row_end > self.scroll_y + ch {
-            self.scroll_y = row_end - ch;
+    pub fn start_col_resize(&mut self, c: i32, x: f64) {
+        if c >= 0 { self.rcol = c; self.rsx = x; self.rsw = self.colw(c as u32); }
+    }
+    pub fn update_col_resize(&mut self, x: f64) {
+        if self.rcol >= 0 {
+            self.cw.insert(self.rcol as u32, (self.rsw + x - self.rsx).max(30.0));
+            self.sz_dirty = true;
         }
     }
+    pub fn end_col_resize(&mut self) { self.rcol = -1; self.recompute(); self.clamp(); }
+    pub fn is_resizing(&self) -> bool { self.rcol >= 0 }
 
-    // ─── Column resize ──────────────────────────────────────────
-
-    pub fn start_col_resize(&mut self, col: i32, start_x: f64) {
-        if col >= 0 {
-            self.resize_col = col;
-            self.resize_start_x = start_x;
-            self.resize_start_width = self.col_w(col as u32);
-        }
+    pub fn toggle_row_collapse(&mut self, k: &str) {
+        let s = k.to_string();
+        if !self.crow.remove(&s) { self.crow.insert(s); }
+        self.dirty = true; self.sz_dirty = true;
+    }
+    pub fn toggle_col_collapse(&mut self, k: &str) {
+        let s = k.to_string();
+        if !self.ccol.remove(&s) { self.ccol.insert(s); }
+        self.dirty = true; self.sz_dirty = true;
     }
 
-    pub fn update_col_resize(&mut self, current_x: f64) {
-        if self.resize_col >= 0 {
-            let delta = current_x - self.resize_start_x;
-            let new_width = (self.resize_start_width + delta).max(30.0);
-            self.col_widths.insert(self.resize_col as u32, new_width);
-        }
+    // scrollbar drag
+    pub fn start_h_drag(&mut self, x: f64) {
+        let s = self.hsb();
+        if s.visible && x >= s.bx && x <= s.bx + s.bw { self.dh = true; self.doff = x - s.bx; }
+    }
+    pub fn start_v_drag(&mut self, y: f64) {
+        let s = self.vsb();
+        if s.visible && y >= s.by && y <= s.by + s.bh { self.dv = true; self.doff = y - s.by; }
+    }
+    pub fn update_h_drag(&mut self, x: f64) {
+        if !self.dh { return; }
+        let s = self.hsb(); let sp = s.tw - s.bw;
+        if sp <= 0.0 { return; }
+        let nt = (x - self.doff).max(s.tx).min(s.tx + sp);
+        self.sx = ((nt - s.tx) / sp) * self.msx(); self.clamp();
+    }
+    pub fn update_v_drag(&mut self, y: f64) {
+        if !self.dv { return; }
+        let s = self.vsb(); let sp = s.th - s.bh;
+        if sp <= 0.0 { return; }
+        let nt = (y - self.doff).max(s.ty).min(s.ty + sp);
+        self.sy = ((nt - s.ty) / sp) * self.msy(); self.clamp();
+    }
+    pub fn end_drag(&mut self) { self.dh = false; self.dv = false; }
+    pub fn is_dragging_scrollbar(&self) -> bool { self.dh || self.dv }
+    pub fn click_h_track(&mut self, x: f64) {
+        let s = self.hsb();
+        if s.visible { self.sx = ((x-s.tx)/s.tw * self.msx()).max(0.0); self.clamp(); }
+    }
+    pub fn click_v_track(&mut self, y: f64) {
+        let s = self.vsb();
+        if s.visible { self.sy = ((y-s.ty)/s.th * self.msy()).max(0.0); self.clamp(); }
     }
 
-    pub fn end_col_resize(&mut self) {
-        self.resize_col = -1;
-    }
-
-    pub fn is_resizing(&self) -> bool {
-        self.resize_col >= 0
-    }
-
-    // ─── Groups ──────────────────────────────────────────────────
-
-    pub fn add_row_group(&mut self, label: &str, members_json: &str, parent_id: i32) -> u32 {
-        let members: Vec<u32> = serde_json::from_str(members_json).unwrap_or_default();
-        let parent = if parent_id > 0 { Some(parent_id as u32) } else { None };
-        let depth = parent
-            .and_then(|pid| self.row_groups.iter().find(|g| g.id == pid))
-            .map(|g| g.depth + 1)
-            .unwrap_or(0);
-
-        let id = self.next_group_id;
-        self.next_group_id += 1;
-        self.row_groups.push(Group { id, label: label.into(), members, collapsed: false, depth, parent });
-        self.hidden_dirty = true;
-        id
-    }
-
-    pub fn add_col_group(&mut self, label: &str, members_json: &str, parent_id: i32) -> u32 {
-        let members: Vec<u32> = serde_json::from_str(members_json).unwrap_or_default();
-        let parent = if parent_id > 0 { Some(parent_id as u32) } else { None };
-        let depth = parent
-            .and_then(|pid| self.col_groups.iter().find(|g| g.id == pid))
-            .map(|g| g.depth + 1)
-            .unwrap_or(0);
-
-        let id = self.next_group_id;
-        self.next_group_id += 1;
-        self.col_groups.push(Group { id, label: label.into(), members, collapsed: false, depth, parent });
-        self.hidden_dirty = true;
-        id
-    }
-
-    pub fn toggle_group(&mut self, group_id: u32) {
-        for g in self.row_groups.iter_mut().chain(self.col_groups.iter_mut()) {
-            if g.id == group_id {
-                g.collapsed = !g.collapsed;
-                self.hidden_dirty = true;
-                return;
-            }
-        }
-    }
-
-    pub fn remove_group(&mut self, group_id: u32) {
-        self.row_groups.retain(|g| g.id != group_id);
-        self.col_groups.retain(|g| g.id != group_id);
-        // Re-parent children
-        let orphan_ids: Vec<u32> = self.row_groups.iter()
-            .chain(self.col_groups.iter())
-            .filter(|g| g.parent == Some(group_id))
-            .map(|g| g.id)
-            .collect();
-        for g in self.row_groups.iter_mut().chain(self.col_groups.iter_mut()) {
-            if orphan_ids.contains(&g.id) {
-                g.parent = None;
-                g.depth = 0;
-            }
-        }
-        self.hidden_dirty = true;
-    }
-
-    // ─── Hidden rebuild ──────────────────────────────────────────
-
-    fn rebuild_hidden(&mut self) {
-        if !self.hidden_dirty { return; }
-
-        let max_r = self.row_groups.iter().flat_map(|g| &g.members).copied().max().unwrap_or(0) as usize;
-        let max_c = self.col_groups.iter().flat_map(|g| &g.members).copied().max().unwrap_or(0) as usize;
-
-        self.hidden_rows = vec![false; max_r + 1];
-        self.hidden_cols = vec![false; max_c + 1];
-
-        let rg = self.row_groups.clone();
-        let cg = self.col_groups.clone();
-
-        let hidden_r_ids = self.collapsed_ids(&rg);
-        let hidden_c_ids = self.collapsed_ids(&cg);
-
-        for g in &rg {
-            if hidden_r_ids.contains(&g.id) {
-                for &m in &g.members {
-                    if (m as usize) < self.hidden_rows.len() { self.hidden_rows[m as usize] = true; }
-                }
-            }
-        }
-        for g in &cg {
-            if hidden_c_ids.contains(&g.id) {
-                for &m in &g.members {
-                    if (m as usize) < self.hidden_cols.len() { self.hidden_cols[m as usize] = true; }
-                }
-            }
-        }
-
-        self.hidden_dirty = false;
-    }
-
-    fn collapsed_ids(&self, groups: &[Group]) -> Vec<u32> {
-        let mut out = Vec::new();
-        for g in groups {
-            if g.collapsed || self.ancestor_collapsed(g.id, groups) {
-                out.push(g.id);
-                self.descendants(g.id, groups, &mut out);
-            }
-        }
-        out.sort();
-        out.dedup();
-        out
-    }
-
-    fn descendants(&self, pid: u32, groups: &[Group], out: &mut Vec<u32>) {
-        for g in groups {
-            if g.parent == Some(pid) && !out.contains(&g.id) {
-                out.push(g.id);
-                self.descendants(g.id, groups, out);
-            }
-        }
-    }
-
-    fn ancestor_collapsed(&self, gid: u32, groups: &[Group]) -> bool {
-        let g = match groups.iter().find(|g| g.id == gid) { Some(g) => g, None => return false };
-        match g.parent {
-            Some(pid) => {
-                groups.iter().find(|g| g.id == pid)
-                    .map(|p| p.collapsed || self.ancestor_collapsed(pid, groups))
-                    .unwrap_or(false)
-            },
-            None => false,
-        }
-    }
-
-    fn is_row_hidden(&self, r: u32) -> bool {
-        (r as usize) < self.hidden_rows.len() && self.hidden_rows[r as usize]
-    }
-    fn is_col_hidden(&self, c: u32) -> bool {
-        (c as usize) < self.hidden_cols.len() && self.hidden_cols[c as usize]
-    }
-
-    fn max_row_depth(&self) -> u32 { self.row_groups.iter().map(|g| g.depth + 1).max().unwrap_or(0) }
-    fn max_col_depth(&self) -> u32 { self.col_groups.iter().map(|g| g.depth + 1).max().unwrap_or(0) }
-
-    // ─── Pixel math ──────────────────────────────────────────────
-
-    fn col_pixel(&self, target: u32) -> f64 {
-        let mut acc = 0.0;
-        for c in 0..target {
-            if !self.is_col_hidden(c) { acc += self.col_w(c); }
-        }
-        acc
-    }
-
-    fn row_pixel(&self, target: u32) -> f64 {
-        let mut acc = 0.0;
-        for r in 0..target {
-            if !self.is_row_hidden(r) { acc += self.row_h(r); }
-        }
-        acc
-    }
-
-    fn pixel_to_col(&self, x: f64) -> u32 {
-        let mut acc = 0.0;
-        let mut c: u32 = 0;
-        loop {
-            if !self.is_col_hidden(c) {
-                let w = self.col_w(c);
-                if acc + w > x { return c; }
-                acc += w;
-            }
-            c += 1;
-            if c > 999_999 { return c; }
-        }
-    }
-
-    fn pixel_to_row(&self, y: f64) -> u32 {
-        let mut acc = 0.0;
-        let mut r: u32 = 0;
-        loop {
-            if !self.is_row_hidden(r) {
-                let h = self.row_h(r);
-                if acc + h > y { return r; }
-                acc += h;
-            }
-            r += 1;
-            if r > 999_999 { return r; }
-        }
-    }
-
-    fn group_pixel_range_col(&self, g: &Group) -> (f64, f64) {
-        if g.members.is_empty() { return (0.0, 0.0); }
-        let lo = *g.members.iter().min().unwrap();
-        let hi = *g.members.iter().max().unwrap();
-        (self.col_pixel(lo), self.col_pixel(hi) + self.col_w(hi))
-    }
-
-    fn group_pixel_range_row(&self, g: &Group) -> (f64, f64) {
-        if g.members.is_empty() { return (0.0, 0.0); }
-        let lo = *g.members.iter().min().unwrap();
-        let hi = *g.members.iter().max().unwrap();
-        (self.row_pixel(lo), self.row_pixel(hi) + self.row_h(hi))
-    }
-
-    fn metrics(&self) -> GridMetrics {
-        let rd = self.max_row_depth();
-        let cd = self.max_col_depth();
-        let ox = rd as f64 * self.bracket_size + self.row_header_width;
-        let oy = cd as f64 * self.bracket_size + self.col_header_height;
-        GridMetrics {
-            row_header_width: self.row_header_width,
-            col_header_height: self.col_header_height,
-            group_rows_depth: rd,
-            group_cols_depth: cd,
-            bracket_size: self.bracket_size,
-            content_origin_x: ox,
-            content_origin_y: oy,
-        }
-    }
-
-    // ─── Hit test ────────────────────────────────────────────────
-
+    // hit test
     pub fn hit_test(&mut self, cx: f64, cy: f64) -> String {
-        self.rebuild_hidden();
-        let m = self.metrics();
+        self.ensure();
+        let ox = self.origin_x(); let oy = self.origin_y();
 
-        // Column group area
-        if cy < m.group_cols_depth as f64 * m.bracket_size && cx >= m.content_origin_x {
-            let depth = (cy / m.bracket_size) as u32;
-            let data_x = cx - m.content_origin_x + self.scroll_x;
-            for g in &self.col_groups {
-                if g.depth != depth { continue; }
-                let (s, e) = self.group_pixel_range_col(g);
-                if data_x >= s && data_x <= e {
-                    let r = HitResult { hit_type: "col_group".into(), row: None, col: None, group_id: Some(g.id) };
-                    return serde_json::to_string(&r).unwrap();
+        // scrollbars
+        let hs = self.hsb();
+        if hs.visible && cy >= hs.ty && cy <= hs.ty+hs.th && cx >= hs.tx && cx <= hs.tx+hs.tw {
+            return hjson("h_scrollbar", None, None, None);
+        }
+        let vs = self.vsb();
+        if vs.visible && cx >= vs.tx && cx <= vs.tx+vs.tw && cy >= vs.ty && cy <= vs.ty+vs.th {
+            return hjson("v_scrollbar", None, None, None);
+        }
+
+        // brackets
+        let bw = self.bdepth() as f64 * self.bs;
+        if cx < bw && cy >= oy + self.frzh {
+            let d = (cx / self.bs) as u32;
+            let ly = cy - oy - self.frzh + self.sy;
+            for (i, n) in self.rnodes.iter().enumerate() {
+                if n.depth as u32 != d || n.children.is_empty() || n.is_subtotal || n.is_grand_total { continue; }
+                if let Some(gr) = n.grid_index {
+                    if gr < self.fr { continue; }
+                    let sy = self.srow_px(gr);
+                    let lr = self.last_desc(i).unwrap_or(gr);
+                    let ey = self.srow_px(lr) + self.rowh(lr);
+                    if ly >= sy && ly <= ey {
+                        return hjson("row_bracket", Some(i as u32), None, Some(n.full_key.join("|")));
+                    }
                 }
             }
         }
 
-        // Row group area
-        if cx < m.group_rows_depth as f64 * m.bracket_size && cy >= m.content_origin_y {
-            let depth = (cx / m.bracket_size) as u32;
-            let data_y = cy - m.content_origin_y + self.scroll_y;
-            for g in &self.row_groups {
-                if g.depth != depth { continue; }
-                let (s, e) = self.group_pixel_range_row(g);
-                if data_y >= s && data_y <= e {
-                    let r = HitResult { hit_type: "row_group".into(), row: None, col: None, group_id: Some(g.id) };
-                    return serde_json::to_string(&r).unwrap();
+        // cells
+        if cx >= ox && cy >= oy {
+            let rx = cx - ox; let ry = cy - oy;
+            let col = if rx < self.frzw { px_to_frozen_col(rx, self.fc, &self.cw, self.dcw) }
+                      else { px_to_scroll_col(rx - self.frzw + self.sx, self.fc, self.tc, &self.cw, self.dcw) };
+            let row = if ry < self.frzh { px_to_frozen_row(ry, self.fr, &self.rh_map, self.drh) }
+                      else { px_to_scroll_row(ry - self.frzh + self.sy, self.fr, self.tr, &self.rh_map, self.drh) };
+
+            // col resize
+            if ry < self.frzh {
+                let ce = if rx < self.frzw {
+                    self.fcol_px(col) + self.colw(col)
+                } else {
+                    self.scol_px(col) + self.colw(col) - self.sx + self.frzw
+                };
+                if (rx - ce).abs() < 5.0 {
+                    return hjson("col_resize", None, Some(col), None);
                 }
             }
+            return hjson("cell", Some(row), Some(col), None);
         }
-
-        // Column header — check for resize handle
-        if cy >= m.content_origin_y - m.col_header_height && cy < m.content_origin_y && cx >= m.content_origin_x {
-            let data_x = cx - m.content_origin_x + self.scroll_x;
-            let col = self.pixel_to_col(data_x);
-            let col_end = self.col_pixel(col) + self.col_w(col);
-            let dist_to_edge = (data_x - col_end).abs();
-            if dist_to_edge < 5.0 {
-                let r = HitResult { hit_type: "col_resize".into(), row: None, col: Some(col), group_id: None };
-                return serde_json::to_string(&r).unwrap();
-            }
-            let r = HitResult { hit_type: "col_header".into(), row: None, col: Some(col), group_id: None };
-            return serde_json::to_string(&r).unwrap();
-        }
-
-        // Cell
-        if cx >= m.content_origin_x && cy >= m.content_origin_y {
-            let data_x = cx - m.content_origin_x + self.scroll_x;
-            let data_y = cy - m.content_origin_y + self.scroll_y;
-            let col = self.pixel_to_col(data_x);
-            let row = self.pixel_to_row(data_y);
-            let r = HitResult { hit_type: "cell".into(), row: Some(row), col: Some(col), group_id: None };
-            return serde_json::to_string(&r).unwrap();
-        }
-
-        let r = HitResult { hit_type: "none".into(), row: None, col: None, group_id: None };
-        serde_json::to_string(&r).unwrap()
+        hjson("none", None, None, None)
     }
 
-    // ─── Get cell screen rect (for editor positioning) ──────────
-
-    pub fn cell_screen_rect(&mut self, row: u32, col: u32) -> String {
-        self.rebuild_hidden();
-        let m = self.metrics();
-        let sx = self.col_pixel(col) - self.scroll_x + m.content_origin_x;
-        let sy = self.row_pixel(row) - self.scroll_y + m.content_origin_y;
-        let w = self.col_w(col);
-        let h = self.row_h(row);
-        format!(r#"{{"x":{},"y":{},"w":{},"h":{}}}"#, sx, sy, w, h)
+    pub fn cell_screen_rect(&mut self, r: u32, c: u32) -> String {
+        self.ensure();
+        let ox = self.origin_x(); let oy = self.origin_y();
+        let sx = if c < self.fc { self.fcol_px(c) + ox }
+                 else { self.scol_px(c) - self.sx + ox + self.frzw };
+        let sy = if r < self.fr { self.frow_px(r) + oy }
+                 else { self.srow_px(r) - self.sy + oy + self.frzh };
+        format!(r#"{{"x":{},"y":{},"w":{},"h":{}}}"#, sx, sy, self.colw(c), self.rowh(r))
     }
-
-    // ─── Compute render frame ────────────────────────────────────
 
     pub fn render_frame(&mut self) -> String {
-        self.rebuild_hidden();
-        let m = self.metrics();
-        let ox = m.content_origin_x;
-        let oy = m.content_origin_y;
-        let cw = self.viewport_w - ox;
-        let ch = self.viewport_h - oy;
+        self.ensure();
+        let ox = self.origin_x(); let oy = self.origin_y();
+        let fw = self.frzw; let fh = self.frzh;
+        let dvw = self.dvw(); let dvh = self.dvh();
 
-        // Visible columns
-        let mut vis_cols: Vec<(u32, f64)> = Vec::new();
-        {
-            let mut px = 0.0_f64;
-            let mut c = 0u32;
-            while px + self.col_w(c) <= self.scroll_x {
-                if !self.is_col_hidden(c) { px += self.col_w(c); }
-                c += 1;
-                if c > 999_999 { break; }
-            }
-            loop {
-                if c > 999_999 { break; }
-                if self.is_col_hidden(c) { c += 1; continue; }
-                let sx = px - self.scroll_x + ox;
-                if sx >= self.viewport_w { break; }
-                vis_cols.push((c, sx));
-                px += self.col_w(c);
-                c += 1;
-            }
-        }
+        let mut cells = Vec::new();
+        let mut ch = Vec::new();
+        let mut rh = Vec::new();
 
-        // Visible rows
-        let mut vis_rows: Vec<(u32, f64)> = Vec::new();
-        {
-            let mut py = 0.0_f64;
-            let mut r = 0u32;
-            while py + self.row_h(r) <= self.scroll_y {
-                if !self.is_row_hidden(r) { py += self.row_h(r); }
-                r += 1;
-                if r > 999_999 { break; }
+        // frozen cols
+        let fcols: Vec<(u32,f64)> = {
+            let mut v = Vec::new(); let mut px = 0.0;
+            for c in 0..self.fc { v.push((c, ox+px)); px += self.colw(c); }
+            v
+        };
+        // visible scrollable cols
+        let scols: Vec<(u32,f64)> = {
+            let mut v = Vec::new(); let mut px = 0.0_f64;
+            for c in self.fc..self.tc {
+                let w = self.colw(c); let s = px - self.sx;
+                if s+w > 0.0 && s < dvw { v.push((c, ox+fw+s)); }
+                px += w; if s > dvw { break; }
             }
-            loop {
-                if r > 999_999 { break; }
-                if self.is_row_hidden(r) { r += 1; continue; }
-                let sy = py - self.scroll_y + oy;
-                if sy >= self.viewport_h { break; }
-                vis_rows.push((r, sy));
-                py += self.row_h(r);
-                r += 1;
+            v
+        };
+        // frozen rows
+        let frows: Vec<(u32,f64)> = {
+            let mut v = Vec::new(); let mut py = 0.0;
+            for r in 0..self.fr { v.push((r, oy+py)); py += self.rowh(r); }
+            v
+        };
+        // visible scrollable rows
+        let srows: Vec<(u32,f64)> = {
+            let mut v = Vec::new(); let mut py = 0.0_f64;
+            for r in self.fr..self.tr {
+                let h = self.rowh(r); let s = py - self.sy;
+                if s+h > 0.0 && s < dvh { v.push((r, oy+fh+s)); }
+                py += h; if s > dvh { break; }
             }
-        }
+            v
+        };
 
-        // Cells
-        let mut cells: Vec<VisibleCell> = Vec::new();
-        for &(row, sy) in &vis_rows {
-            let h = self.row_h(row);
-            for &(col, sx) in &vis_cols {
-                let w = self.col_w(col);
-                let cd = self.cells.get(&(row, col));
-                let selected = self.sel_row == row as i32 && self.sel_col == col as i32;
-                let editing = self.edit_row == row as i32 && self.edit_col == col as i32;
-                cells.push(VisibleCell {
-                    sx,
-                    sy,
-                    w,
-                    h,
-                    text: cd.map(|c| c.text.clone()).unwrap_or_default(),
-                    bg: if editing {
-                        "#FFFFFF".into()
-                    } else if selected {
-                        "#DBEAFE".into()
-                    } else {
-                        cd.and_then(|c| c.bg_color.clone())
-                            .unwrap_or("#FFFFFF".into())
-                    },
-                    fg: cd
-                        .and_then(|c| c.fg_color.clone())
-                        .unwrap_or("#1E293B".into()),
-                    bold: cd.map(|c| c.bold).unwrap_or(false),
-                    row,
-                    col,
-                    selected,
-                    editing,
-                });
+        // emit 4 quadrants
+        for &(r,sy) in frows.iter().chain(srows.iter()) {
+            let h = self.rowh(r);
+            for &(c,sx) in fcols.iter().chain(scols.iter()) {
+                self.emit_cell(&mut cells, r, c, sx, sy, self.colw(c), h);
             }
         }
 
-        // Headers
-        let col_headers: Vec<VisibleHeader> = vis_cols.iter().map(|&(c, sx)| {
-            VisibleHeader {
-                pos: sx, size: self.col_w(c),
-                label: col_label(c), index: c,
-                highlighted: self.sel_col == c as i32,
-            }
-        }).collect();
+        // col headers
+        for &(c,sx) in fcols.iter().chain(scols.iter()) {
+            ch.push(VHeader { pos:sx, size:self.colw(c), label:col_label(c), index:c, highlighted: self.sel_c==c as i32 });
+        }
+        // row headers
+        for &(r,sy) in &srows {
+            rh.push(VHeader { pos:sy, size:self.rowh(r), label:(r+1).to_string(), index:r, highlighted: self.sel_r==r as i32 });
+        }
 
-        let row_headers: Vec<VisibleHeader> = vis_rows.iter().map(|&(r, sy)| {
-            VisibleHeader {
-                pos: sy, size: self.row_h(r),
-                label: (r + 1).to_string(), index: r,
-                highlighted: self.sel_row == r as i32,
-            }
-        }).collect();
+        // brackets
+        let rb = self.vis_brackets(oy, fh, dvh);
 
-        // Group brackets
-        let rg = self.row_groups.clone();
-        let cg = self.col_groups.clone();
+        let m = Metrics {
+            ox, oy, fw, fh,
+            fc: self.fc, fr: self.fr,
+            rhw: self.rhw, chh: self.chh,
+            bd: self.bdepth(), bs: self.bs, sbs: self.sbs,
+        };
 
-        let row_brackets: Vec<GroupBracket> = rg.iter().filter(|g| !self.ancestor_collapsed(g.id, &rg)).map(|g| {
-            let (s, e) = self.group_pixel_range_row(g);
-            GroupBracket {
-                id: g.id, label: g.label.clone(),
-                start: s - self.scroll_y + oy,
-                end: e - self.scroll_y + oy,
-                depth: g.depth, collapsed: g.collapsed, is_row: true,
-            }
-        }).filter(|b| b.end >= oy && b.start < self.viewport_h).collect();
-
-        let col_brackets: Vec<GroupBracket> = cg.iter().filter(|g| !self.ancestor_collapsed(g.id, &cg)).map(|g| {
-            let (s, e) = self.group_pixel_range_col(g);
-            GroupBracket {
-                id: g.id, label: g.label.clone(),
-                start: s - self.scroll_x + ox,
-                end: e - self.scroll_x + ox,
-                depth: g.depth, collapsed: g.collapsed, is_row: false,
-            }
-        }).filter(|b| b.end >= ox && b.start < self.viewport_w).collect();
-
-        let frame = RenderFrame { cells, col_headers, row_headers, row_brackets, col_brackets, metrics: m };
+        let frame = Frame { cells, ch, rh, rb, m, hs: self.hsb(), vs: self.vsb() };
         serde_json::to_string(&frame).unwrap()
     }
 
-    // ─── Stats ───────────────────────────────────────────────────
+    fn emit_cell(&self, cells: &mut Vec<VCell>, r: u32, c: u32, sx: f64, sy: f64, w: f64, h: f64) {
+        let cd = self.cells.get(&(r,c));
+        let sel = self.sel_r == r as i32 && self.sel_c == c as i32;
+        let ed = self.ed_r == r as i32 && self.ed_c == c as i32;
+
+        let (ct, ta, ind) = if let Some(d) = cd {
+            let ct = if d.is_grand_total { 4u8 } else if d.is_subtotal { 3 }
+                     else if d.is_header { 1 } else if d.is_value { 2 } else { 0 };
+            let ta = if d.is_value { 2u8 }
+                     else if d.is_header && c < self.fc { 0 }
+                     else if d.is_header { 1 } else { 0 };
+            let ind = if c < self.fc && !d.is_subtotal && !d.is_grand_total && r >= self.fr {
+                self.rnodes.iter().find(|n| n.grid_index == Some(r)).map(|n| n.depth as f64 * 12.0).unwrap_or(0.0)
+            } else { 0.0 };
+            (ct, ta, ind)
+        } else { (0u8, 0u8, 0.0) };
+
+        let bg = if ed { "#FFFFFF".into() } else if sel { "#1E3A5F".into() }
+                 else { cd.and_then(|d| d.bg.clone()).unwrap_or("#0F172A".into()) };
+        let fg = cd.and_then(|d| d.fg.clone()).unwrap_or("#E2E8F0".into());
+
+        cells.push(VCell {
+            sx,sy,w,h,
+            text: cd.map(|d| d.text.clone()).unwrap_or_default(),
+            bg, fg, bold: cd.map(|d| d.bold).unwrap_or(false),
+            row:r, col:c, selected:sel, editing:ed,
+            cell_type:ct, text_align:ta, indent:ind,
+        });
+    }
+
+    fn vis_brackets(&self, oy: f64, fh: f64, dvh: f64) -> Vec<VBracket> {
+        let mut out = Vec::new();
+        for (i,n) in self.rnodes.iter().enumerate() {
+            if n.children.is_empty() || n.is_subtotal || n.is_grand_total { continue; }
+            if let Some(gr) = n.grid_index {
+                if gr < self.fr { continue; }
+                let lr = self.last_desc(i).unwrap_or(gr);
+                let sp = self.srow_px(gr) - self.sy + oy + fh;
+                let ep = self.srow_px(lr) + self.rowh(lr) - self.sy + oy + fh;
+                if ep > oy + fh && sp < oy + fh + dvh {
+                    out.push(VBracket { id:i as u32, label:n.key.clone(), start:sp, end:ep, depth:n.depth as u32, collapsed:n.collapsed });
+                }
+            }
+        }
+        out
+    }
 
     pub fn cell_count(&self) -> u32 { self.cells.len() as u32 }
-    pub fn group_count(&self) -> u32 { (self.row_groups.len() + self.col_groups.len()) as u32 }
+    pub fn get_total_rows(&self) -> u32 { self.tr }
+    pub fn get_total_cols(&self) -> u32 { self.tc }
+}
+
+// ─── Free functions ──────────────────────────────────────────
+
+fn build_tree(
+    recs: &[RawRecord], fields: &[PivotField], nodes: &mut Vec<PivotNode>,
+    subtotals: bool, grand: bool, collapsed: &BTreeSet<String>,
+) -> Vec<usize> {
+    if fields.is_empty() {
+        nodes.push(PivotNode {
+            key: String::new(), full_key: vec![], depth: 0,
+            children: vec![], is_subtotal: false, is_grand_total: false,
+            collapsed: false, grid_index: None,
+        });
+        let mut roots = vec![0];
+        if grand {
+            let gi = nodes.len();
+            nodes.push(PivotNode {
+                key: "Grand Total".into(), full_key: vec!["__gt__".into()],
+                depth: 0, children: vec![], is_subtotal: false,
+                is_grand_total: true, collapsed: false, grid_index: None,
+            });
+            roots.push(gi);
+        }
+        return roots;
+    }
+
+    let mut roots = tree_level(recs, fields, nodes, subtotals, collapsed, 0, &[], &[]);
+    if grand {
+        let gi = nodes.len();
+        nodes.push(PivotNode {
+            key: "Grand Total".into(), full_key: vec!["__gt__".into()],
+            depth: 0, children: vec![], is_subtotal: false,
+            is_grand_total: true, collapsed: false, grid_index: None,
+        });
+        roots.push(gi);
+    }
+    roots
+}
+
+fn tree_level(
+    recs: &[RawRecord], fields: &[PivotField], nodes: &mut Vec<PivotNode>,
+    subtotals: bool, collapsed: &BTreeSet<String>,
+    depth: usize, pkey: &[String], filter: &[(usize, String)],
+) -> Vec<usize> {
+    if depth >= fields.len() { return vec![]; }
+    let fname = &fields[depth].name;
+
+    let mut uniq: BTreeSet<String> = BTreeSet::new();
+    'outer: for r in recs {
+        for &(fi, ref fv) in filter {
+            if r.strings.get(&fields[fi].name).map(|s| s.as_str()).unwrap_or("") != fv.as_str() { continue 'outer; }
+        }
+        if let Some(v) = r.strings.get(fname) { uniq.insert(v.clone()); }
+    }
+
+    let mut out = Vec::new();
+    for val in &uniq {
+        let mut fk = pkey.to_vec(); fk.push(val.clone());
+        let ks = fk.join("|");
+        let is_c = collapsed.contains(&ks);
+        let ni = nodes.len();
+        nodes.push(PivotNode {
+            key: val.clone(), full_key: fk.clone(), depth,
+            children: vec![], is_subtotal: false, is_grand_total: false,
+            collapsed: is_c, grid_index: None,
+        });
+        let mut nf = filter.to_vec(); nf.push((depth, val.clone()));
+        let ch = tree_level(recs, fields, nodes, subtotals, collapsed, depth+1, &fk, &nf);
+        nodes[ni].children = ch;
+        out.push(ni);
+        if subtotals && depth < fields.len()-1 && !nodes[ni].children.is_empty() {
+            let si = nodes.len();
+            let mut sk = fk; sk.push("__sub__".into());
+            nodes.push(PivotNode {
+                key: format!("{} Total", val), full_key: sk, depth,
+                children: vec![], is_subtotal: true, is_grand_total: false,
+                collapsed: false, grid_index: None,
+            });
+            out.push(si);
+        }
+    }
+    out
+}
+
+fn assign_rows(nodes: &mut Vec<PivotNode>, ids: &[usize], next: &mut u32) {
+    for &i in ids {
+        nodes[i].grid_index = Some(*next); *next += 1;
+        if !nodes[i].collapsed && !nodes[i].children.is_empty() {
+            let ch = nodes[i].children.clone();
+            assign_rows(nodes, &ch, next);
+        }
+    }
+}
+
+fn assign_cols(nodes: &mut Vec<PivotNode>, ids: &[usize], nv: u32, next: &mut u32) {
+    for &i in ids {
+        nodes[i].grid_index = Some(*next);
+        if nodes[i].children.is_empty() || nodes[i].collapsed {
+            *next += nv;
+        } else {
+            let ch = nodes[i].children.clone();
+            assign_cols(nodes, &ch, nv, next);
+        }
+    }
+}
+
+fn write_headers(cfg: &PivotConfig, fr: u32, cells: &mut HashMap<(u32,u32), CellData>) {
+    let vr = fr.saturating_sub(1);
+    for (i,f) in cfg.row_fields.iter().enumerate() {
+        cells.insert((vr, i as u32), CellData {
+            text: f.name.clone(), bold: true, is_header: true,
+            bg: Some("#1a2744".into()), fg: Some("#93C5FD".into()), ..Default::default()
+        });
+    }
+    for (i,f) in cfg.col_fields.iter().enumerate() {
+        cells.insert((i as u32, 0), CellData {
+            text: f.name.clone(), bold: true, is_header: true,
+            bg: Some("#1a2744".into()), fg: Some("#93C5FD".into()), ..Default::default()
+        });
+    }
+}
+
+fn write_row_labels(nodes: &[PivotNode], fc: u32, fr: u32, cells: &mut HashMap<(u32,u32), CellData>) {
+    for n in nodes {
+        if let Some(gr) = n.grid_index {
+            let tc = if n.is_subtotal || n.is_grand_total { 0 }
+                     else { (n.depth as u32).min(fc.saturating_sub(1)) };
+            cells.insert((gr, tc), CellData {
+                text: n.key.clone(),
+                bold: n.is_subtotal || n.is_grand_total || n.depth == 0,
+                is_header: true, is_subtotal: n.is_subtotal,
+                is_grand_total: n.is_grand_total, ..Default::default()
+            });
+        }
+    }
+}
+
+fn write_col_labels(nodes: &[PivotNode], cfg: &PivotConfig, fr: u32, cells: &mut HashMap<(u32,u32), CellData>) {
+    let nv = cfg.value_fields.len().max(1) as u32;
+    for n in nodes {
+        if let Some(gc) = n.grid_index {
+            cells.insert((n.depth as u32, gc), CellData {
+                text: n.key.clone(), bold: true, is_header: true,
+                is_subtotal: n.is_subtotal, is_grand_total: n.is_grand_total, ..Default::default()
+            });
+            let leaf = n.children.is_empty() || n.collapsed;
+            if leaf && cfg.value_fields.len() > 1 {
+                let vlr = fr.saturating_sub(1);
+                for (vi,vf) in cfg.value_fields.iter().enumerate() {
+                    cells.insert((vlr, gc + vi as u32), CellData {
+                        text: vf.display_label(), bold: true, is_header: true, ..Default::default()
+                    });
+                }
+            }
+        }
+    }
+}
+
+/// Build a pre-indexed aggregation map.
+/// Key: (row_key, col_key) where keys are the joined field values for matching.
+/// For subtotals/grand totals, we use partial keys.
+fn build_agg_index(records: &[RawRecord], cfg: &PivotConfig) -> AggIndex {
+    let nv = cfg.value_fields.len();
+    let mut idx: AggIndex = HashMap::new();
+
+    // For each record, generate all (row_key_prefix, col_key_prefix) combinations
+    // that this record contributes to. This covers subtotals and grand totals.
+    for rec in records {
+        let row_vals: Vec<String> = cfg.row_fields.iter()
+            .map(|f| rec.strings.get(&f.name).cloned().unwrap_or_default())
+            .collect();
+        let col_vals: Vec<String> = cfg.col_fields.iter()
+            .map(|f| rec.strings.get(&f.name).cloned().unwrap_or_default())
+            .collect();
+
+        let vals: Vec<f64> = cfg.value_fields.iter()
+            .map(|vf| rec.numbers.get(&vf.name).copied().unwrap_or(0.0))
+            .collect();
+
+        // Generate all row key prefixes (for subtotals)
+        // Full key: "A|B|C", partial: "A|B", "A", "" (grand total)
+        let mut row_keys: Vec<String> = Vec::new();
+        row_keys.push("__gt__".into()); // grand total
+        for i in 0..row_vals.len() {
+            row_keys.push(row_vals[..=i].join("|"));
+        }
+        // subtotal keys
+        for i in 0..row_vals.len() {
+            let mut k = row_vals[..=i].join("|");
+            k.push_str("|__sub__");
+            row_keys.push(k);
+        }
+
+        let mut col_keys: Vec<String> = Vec::new();
+        col_keys.push("__gt__".into());
+        for i in 0..col_vals.len() {
+            col_keys.push(col_vals[..=i].join("|"));
+        }
+        for i in 0..col_vals.len() {
+            let mut k = col_vals[..=i].join("|");
+            k.push_str("|__sub__");
+            col_keys.push(k);
+        }
+        // empty key for no-field case
+        if cfg.row_fields.is_empty() { row_keys.push(String::new()); }
+        if cfg.col_fields.is_empty() { col_keys.push(String::new()); }
+
+        for rk in &row_keys {
+            for ck in &col_keys {
+                let entry = idx.entry((rk.clone(), ck.clone())).or_insert_with(|| vec![Vec::new(); nv]);
+                for (vi, &v) in vals.iter().enumerate() {
+                    entry[vi].push(v);
+                }
+            }
+        }
+    }
+
+    idx
+}
+
+fn node_agg_key(node: &PivotNode) -> String {
+    if node.is_grand_total { return "__gt__".into(); }
+    if node.full_key.is_empty() { return String::new(); }
+    node.full_key.join("|")
+}
+
+fn write_data_indexed(
+    rnodes: &[PivotNode], cnodes: &[PivotNode], croots: &[usize],
+    cfg: &PivotConfig, agg: &AggIndex, cells: &mut HashMap<(u32,u32), CellData>,
+) {
+    let leaf_cols = collect_leaves(cnodes, croots);
+    let nv = cfg.value_fields.len();
+
+    for rn in rnodes {
+        let gr = match rn.grid_index { Some(r) => r, None => continue };
+        let rk = node_agg_key(rn);
+
+        for lc in &leaf_cols {
+            let gc = match lc.grid_index { Some(c) => c, None => continue };
+            let ck = node_agg_key(lc);
+
+            if let Some(buckets) = agg.get(&(rk.clone(), ck.clone())) {
+                for (vi, vf) in cfg.value_fields.iter().enumerate() {
+                    if vi < buckets.len() && !buckets[vi].is_empty() {
+                        let result = vf.agg.apply(&buckets[vi]);
+                        cells.insert((gr, gc + vi as u32), CellData {
+                            text: fmt_num(result), is_value: true,
+                            is_subtotal: rn.is_subtotal || lc.is_subtotal,
+                            is_grand_total: rn.is_grand_total || lc.is_grand_total,
+                            bold: rn.is_subtotal || rn.is_grand_total || lc.is_subtotal || lc.is_grand_total,
+                            ..Default::default()
+                        });
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn collect_leaves(nodes: &[PivotNode], roots: &[usize]) -> Vec<PivotNode> {
+    let mut out = Vec::new();
+    fn walk(nodes: &[PivotNode], ids: &[usize], out: &mut Vec<PivotNode>) {
+        for &i in ids {
+            if nodes[i].children.is_empty() || nodes[i].collapsed {
+                out.push(nodes[i].clone());
+            } else { walk(nodes, &nodes[i].children, out); }
+        }
+    }
+    walk(nodes, roots, &mut out);
+    out
+}
+
+fn style_cells(cells: &mut HashMap<(u32,u32), CellData>, fr: u32, fc: u32) {
+    let keys: Vec<(u32,u32)> = cells.keys().cloned().collect();
+    for (r,c) in keys {
+        let d = cells.get(&(r,c)).unwrap().clone();
+        let mut s = d;
+        if s.is_grand_total { s.bg = Some("#1a3350".into()); s.fg = Some("#FBBF24".into()); s.bold = true; }
+        else if s.is_subtotal { s.bg = Some("#172544".into()); s.fg = Some("#93C5FD".into()); s.bold = true; }
+        else if s.is_header && r < fr { s.bg = Some("#1a2744".into()); s.fg = Some("#94A3B8".into()); }
+        else if s.is_header { s.bg = Some("#152238".into()); s.fg = Some("#CBD5E1".into()); }
+        else if s.is_value {
+            let dr = r.saturating_sub(fr);
+            s.bg = Some(if dr%2==0 { "#0F172A".into() } else { "#131d30".into() });
+            s.fg = Some("#E2E8F0".into());
+        }
+        cells.insert((r,c), s);
+    }
+}
+
+fn init_col_widths(cw: &mut BTreeMap<u32,f64>, fc: u32, tc: u32, dcw: f64) {
+    for c in 0..fc { cw.entry(c).or_insert(130.0); }
+    for c in fc..tc { cw.entry(c).or_insert(dcw); }
+}
+
+fn px_to_frozen_col(x: f64, fc: u32, cw: &BTreeMap<u32,f64>, dcw: f64) -> u32 {
+    let mut a = 0.0;
+    for c in 0..fc { let w = *cw.get(&c).unwrap_or(&dcw); if a+w > x { return c; } a += w; }
+    fc.saturating_sub(1)
+}
+fn px_to_frozen_row(y: f64, fr: u32, rh: &BTreeMap<u32,f64>, drh: f64) -> u32 {
+    let mut a = 0.0;
+    for r in 0..fr { let h = *rh.get(&r).unwrap_or(&drh); if a+h > y { return r; } a += h; }
+    fr.saturating_sub(1)
+}
+fn px_to_scroll_col(x: f64, fc: u32, tc: u32, cw: &BTreeMap<u32,f64>, dcw: f64) -> u32 {
+    let mut a = 0.0;
+    for c in fc..tc { let w = *cw.get(&c).unwrap_or(&dcw); if a+w > x { return c; } a += w; }
+    tc.saturating_sub(1)
+}
+fn px_to_scroll_row(y: f64, fr: u32, tr: u32, rh: &BTreeMap<u32,f64>, drh: f64) -> u32 {
+    let mut a = 0.0;
+    for r in fr..tr { let h = *rh.get(&r).unwrap_or(&drh); if a+h > y { return r; } a += h; }
+    tr.saturating_sub(1)
+}
+
+fn hjson(t: &str, r: Option<u32>, c: Option<u32>, k: Option<String>) -> String {
+    serde_json::to_string(&Hit { t: t.into(), r, c, k }).unwrap()
 }
 
 fn col_label(mut c: u32) -> String {
     let mut s = String::new();
-    loop {
-        s.insert(0, (b'A' + (c % 26) as u8) as char);
-        if c < 26 { break; }
-        c = c / 26 - 1;
-    }
+    loop { s.insert(0, (b'A'+(c%26) as u8) as char); if c < 26 { break; } c = c/26-1; }
     s
+}
+
+fn fmt_num(v: f64) -> String {
+    if v == v.floor() && v.abs() < 1e15 {
+        let i = v as i64; let neg = i < 0;
+        let s = i.unsigned_abs().to_string();
+        let b: Vec<u8> = s.bytes().collect();
+        let mut r = Vec::new();
+        for (j,&ch) in b.iter().enumerate() {
+            if j > 0 && (b.len()-j)%3==0 { r.push(b','); }
+            r.push(ch);
+        }
+        let f = String::from_utf8(r).unwrap();
+        if neg { format!("-{}",f) } else { f }
+    } else { format!("{:.1}",v) }
 }

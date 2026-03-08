@@ -11,33 +11,8 @@ export class Grid {
         const ptr = this.__destroy_into_raw();
         wasm.__wbg_grid_free(ptr, 0);
     }
-    /**
-     * @param {string} label
-     * @param {string} members_json
-     * @param {number} parent_id
-     * @returns {number}
-     */
-    add_col_group(label, members_json, parent_id) {
-        const ptr0 = passStringToWasm0(label, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passStringToWasm0(members_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len1 = WASM_VECTOR_LEN;
-        const ret = wasm.grid_add_col_group(this.__wbg_ptr, ptr0, len0, ptr1, len1, parent_id);
-        return ret >>> 0;
-    }
-    /**
-     * @param {string} label
-     * @param {string} members_json
-     * @param {number} parent_id
-     * @returns {number}
-     */
-    add_row_group(label, members_json, parent_id) {
-        const ptr0 = passStringToWasm0(label, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passStringToWasm0(members_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len1 = WASM_VECTOR_LEN;
-        const ret = wasm.grid_add_row_group(this.__wbg_ptr, ptr0, len0, ptr1, len1, parent_id);
-        return ret >>> 0;
+    build_pivot() {
+        wasm.grid_build_pivot(this.__wbg_ptr);
     }
     /**
      * @returns {number}
@@ -47,15 +22,15 @@ export class Grid {
         return ret >>> 0;
     }
     /**
-     * @param {number} row
-     * @param {number} col
+     * @param {number} r
+     * @param {number} c
      * @returns {string}
      */
-    cell_screen_rect(row, col) {
+    cell_screen_rect(r, c) {
         let deferred1_0;
         let deferred1_1;
         try {
-            const ret = wasm.grid_cell_screen_rect(this.__wbg_ptr, row, col);
+            const ret = wasm.grid_cell_screen_rect(this.__wbg_ptr, r, c);
             deferred1_0 = ret[0];
             deferred1_1 = ret[1];
             return getStringFromWasm0(ret[0], ret[1]);
@@ -64,11 +39,23 @@ export class Grid {
         }
     }
     /**
-     * @param {number} row
-     * @param {number} col
+     * @param {number} r
+     * @param {number} c
      */
-    clear_cell(row, col) {
-        wasm.grid_clear_cell(this.__wbg_ptr, row, col);
+    clear_cell(r, c) {
+        wasm.grid_clear_cell(this.__wbg_ptr, r, c);
+    }
+    /**
+     * @param {number} x
+     */
+    click_h_track(x) {
+        wasm.grid_click_h_track(this.__wbg_ptr, x);
+    }
+    /**
+     * @param {number} y
+     */
+    click_v_track(y) {
+        wasm.grid_click_v_track(this.__wbg_ptr, y);
     }
     /**
      * @param {number} r
@@ -94,16 +81,19 @@ export class Grid {
     end_col_resize() {
         wasm.grid_end_col_resize(this.__wbg_ptr);
     }
+    end_drag() {
+        wasm.grid_end_drag(this.__wbg_ptr);
+    }
     /**
-     * @param {number} row
-     * @param {number} col
+     * @param {number} r
+     * @param {number} c
      * @returns {string}
      */
-    get_cell_text(row, col) {
+    get_cell_text(r, c) {
         let deferred1_0;
         let deferred1_1;
         try {
-            const ret = wasm.grid_get_cell_text(this.__wbg_ptr, row, col);
+            const ret = wasm.grid_get_cell_text(this.__wbg_ptr, r, c);
             deferred1_0 = ret[0];
             deferred1_1 = ret[1];
             return getStringFromWasm0(ret[0], ret[1]);
@@ -128,8 +118,15 @@ export class Grid {
     /**
      * @returns {number}
      */
-    group_count() {
-        const ret = wasm.grid_group_count(this.__wbg_ptr);
+    get_total_cols() {
+        const ret = wasm.grid_get_total_cols(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * @returns {number}
+     */
+    get_total_rows() {
+        const ret = wasm.grid_get_total_rows(this.__wbg_ptr);
         return ret >>> 0;
     }
     /**
@@ -152,6 +149,13 @@ export class Grid {
     /**
      * @returns {boolean}
      */
+    is_dragging_scrollbar() {
+        const ret = wasm.grid_is_dragging_scrollbar(this.__wbg_ptr);
+        return ret !== 0;
+    }
+    /**
+     * @returns {boolean}
+     */
     is_resizing() {
         const ret = wasm.grid_is_resizing(this.__wbg_ptr);
         return ret !== 0;
@@ -159,28 +163,10 @@ export class Grid {
     /**
      * @param {string} json
      */
-    load_cells_json(json) {
+    load_data(json) {
         const ptr0 = passStringToWasm0(json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        wasm.grid_load_cells_json(this.__wbg_ptr, ptr0, len0);
-    }
-    /**
-     * Load data in a simple pivot-table shape.
-     *
-     * Expects JSON like:
-     *   [{ "row": "Row A", "col": "Col 1", "value": 10.0 }, ...]
-     *
-     * It will:
-     * - Clear existing cells and groups.
-     * - Use row index 0 as header row (column labels).
-     * - Use column index 0 as header column (row labels).
-     * - Fill numeric cells with the sum of `value` for each (row, col) pair.
-     * @param {string} json
-     */
-    load_pivot_json(json) {
-        const ptr0 = passStringToWasm0(json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        wasm.grid_load_pivot_json(this.__wbg_ptr, ptr0, len0);
+        wasm.grid_load_data(this.__wbg_ptr, ptr0, len0);
     }
     /**
      * @param {number} dr
@@ -190,20 +176,14 @@ export class Grid {
         wasm.grid_move_selection(this.__wbg_ptr, dr, dc);
     }
     /**
-     * @param {number} vw
-     * @param {number} vh
+     * @param {number} w
+     * @param {number} h
      */
-    constructor(vw, vh) {
-        const ret = wasm.grid_new(vw, vh);
+    constructor(w, h) {
+        const ret = wasm.grid_new(w, h);
         this.__wbg_ptr = ret >>> 0;
         GridFinalization.register(this, this.__wbg_ptr, this);
         return this;
-    }
-    /**
-     * @param {number} group_id
-     */
-    remove_group(group_id) {
-        wasm.grid_remove_group(this.__wbg_ptr, group_id);
     }
     /**
      * @returns {string}
@@ -249,54 +229,29 @@ export class Grid {
         wasm.grid_select(this.__wbg_ptr, r, c);
     }
     /**
-     * @param {number} row
-     * @param {number} col
-     * @param {string} text
+     * @param {number} r
+     * @param {number} c
+     * @param {string} t
      */
-    set_cell(row, col, text) {
-        const ptr0 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    set_cell(r, c, t) {
+        const ptr0 = passStringToWasm0(t, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        wasm.grid_set_cell(this.__wbg_ptr, row, col, ptr0, len0);
+        wasm.grid_set_cell(this.__wbg_ptr, r, c, ptr0, len0);
     }
     /**
-     * @param {number} row
-     * @param {number} col
-     * @param {string} bg
-     * @param {string} fg
-     * @param {boolean} bold
-     */
-    set_cell_style(row, col, bg, fg, bold) {
-        const ptr0 = passStringToWasm0(bg, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passStringToWasm0(fg, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len1 = WASM_VECTOR_LEN;
-        wasm.grid_set_cell_style(this.__wbg_ptr, row, col, ptr0, len0, ptr1, len1, bold);
-    }
-    /**
-     * @param {number} col
+     * @param {number} c
      * @param {number} w
      */
-    set_col_width(col, w) {
-        wasm.grid_set_col_width(this.__wbg_ptr, col, w);
+    set_col_width(c, w) {
+        wasm.grid_set_col_width(this.__wbg_ptr, c, w);
     }
     /**
-     * @param {number} w
+     * @param {string} json
      */
-    set_default_col_width(w) {
-        wasm.grid_set_default_col_width(this.__wbg_ptr, w);
-    }
-    /**
-     * @param {number} h
-     */
-    set_default_row_height(h) {
-        wasm.grid_set_default_row_height(this.__wbg_ptr, h);
-    }
-    /**
-     * @param {number} row
-     * @param {number} h
-     */
-    set_row_height(row, h) {
-        wasm.grid_set_row_height(this.__wbg_ptr, row, h);
+    set_pivot_config(json) {
+        const ptr0 = passStringToWasm0(json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.grid_set_pivot_config(this.__wbg_ptr, ptr0, len0);
     }
     /**
      * @param {number} x
@@ -313,23 +268,57 @@ export class Grid {
         wasm.grid_set_viewport(this.__wbg_ptr, w, h);
     }
     /**
-     * @param {number} col
-     * @param {number} start_x
+     * @param {number} c
+     * @param {number} x
      */
-    start_col_resize(col, start_x) {
-        wasm.grid_start_col_resize(this.__wbg_ptr, col, start_x);
+    start_col_resize(c, x) {
+        wasm.grid_start_col_resize(this.__wbg_ptr, c, x);
     }
     /**
-     * @param {number} group_id
+     * @param {number} x
      */
-    toggle_group(group_id) {
-        wasm.grid_toggle_group(this.__wbg_ptr, group_id);
+    start_h_drag(x) {
+        wasm.grid_start_h_drag(this.__wbg_ptr, x);
     }
     /**
-     * @param {number} current_x
+     * @param {number} y
      */
-    update_col_resize(current_x) {
-        wasm.grid_update_col_resize(this.__wbg_ptr, current_x);
+    start_v_drag(y) {
+        wasm.grid_start_v_drag(this.__wbg_ptr, y);
+    }
+    /**
+     * @param {string} k
+     */
+    toggle_col_collapse(k) {
+        const ptr0 = passStringToWasm0(k, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.grid_toggle_col_collapse(this.__wbg_ptr, ptr0, len0);
+    }
+    /**
+     * @param {string} k
+     */
+    toggle_row_collapse(k) {
+        const ptr0 = passStringToWasm0(k, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.grid_toggle_row_collapse(this.__wbg_ptr, ptr0, len0);
+    }
+    /**
+     * @param {number} x
+     */
+    update_col_resize(x) {
+        wasm.grid_update_col_resize(this.__wbg_ptr, x);
+    }
+    /**
+     * @param {number} x
+     */
+    update_h_drag(x) {
+        wasm.grid_update_h_drag(this.__wbg_ptr, x);
+    }
+    /**
+     * @param {number} y
+     */
+    update_v_drag(y) {
+        wasm.grid_update_v_drag(this.__wbg_ptr, y);
     }
 }
 if (Symbol.dispose) Grid.prototype[Symbol.dispose] = Grid.prototype.free;
