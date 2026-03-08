@@ -4,7 +4,6 @@ import type { RenderFrame, HitResult, CellRect } from '../models/grid.models';
 @Injectable({ providedIn: 'root' })
 export class GridWasmService {
   private grid: any = null;
-  private wasmModule: any = null;
 
   readonly ready = signal(false);
   readonly cellCount = signal(0);
@@ -19,11 +18,10 @@ export class GridWasmService {
       const wasm = await import('../wasm/grid_wasm.js' as any);
       await wasm.default(wasmUrl);
 
-      this.wasmModule = wasm;
       this.grid = new wasm.Grid(viewportWidth, viewportHeight);
 
-      // Populate initial data
-      this.populateInitialData();
+      // Populate initial data (pivot-style)
+      this.populateInitialPivotData();
 
       this.ready.set(true);
       this.statusMessage.set('Ready');
@@ -34,16 +32,29 @@ export class GridWasmService {
     }
   }
 
-  private populateInitialData(): void {
-    for (let r = 0; r < 30; r++) {
-      for (let c = 0; c < 15; c++) {
-        this.grid.set_cell(r, c, `R${r + 1}·C${c + 1}`);
-      }
-    }
-    // Style some header cells
-    for (let c = 0; c < 15; c++) {
-      this.grid.set_cell_style(0, c, '#F1F5F9', '#0F172A', true);
-    }
+  // Simple demo pivot data: Region x Year with Sales totals.
+  private populateInitialPivotData(): void {
+    if (!this.grid) return;
+
+    const records = [
+      { row: 'North', col: '2023', value: 120 },
+      { row: 'North', col: '2024', value: 180 },
+      { row: 'South', col: '2023', value: 90 },
+      { row: 'South', col: '2024', value: 150 },
+      { row: 'East',  col: '2023', value: 60 },
+      { row: 'East',  col: '2024', value: 110 },
+      { row: 'West',  col: '2023', value: 75 },
+      { row: 'West',  col: '2024', value: 95 },
+    ];
+
+    this.grid.load_pivot_json(JSON.stringify(records));
+  }
+
+  // Public API to load arbitrary pivot data from the Angular side.
+  loadPivotData(records: { row: string; col: string; value: number }[]): void {
+    if (!this.grid) return;
+    this.grid.load_pivot_json(JSON.stringify(records));
+    this.updateStats();
   }
 
   // ─── Grid operations ────────────────────────────────────────

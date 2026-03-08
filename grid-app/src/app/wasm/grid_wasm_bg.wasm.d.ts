@@ -18,6 +18,7 @@ export const grid_group_count: (a: number) => number;
 export const grid_hit_test: (a: number, b: number, c: number) => [number, number];
 export const grid_is_resizing: (a: number) => number;
 export const grid_load_cells_json: (a: number, b: number, c: number) => void;
+export const grid_load_pivot_json: (a: number, b: number, c: number) => void;
 export const grid_move_selection: (a: number, b: number, c: number) => void;
 export const grid_new: (a: number, b: number) => number;
 export const grid_remove_group: (a: number, b: number) => void;

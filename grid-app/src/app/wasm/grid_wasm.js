@@ -165,6 +165,24 @@ export class Grid {
         wasm.grid_load_cells_json(this.__wbg_ptr, ptr0, len0);
     }
     /**
+     * Load data in a simple pivot-table shape.
+     *
+     * Expects JSON like:
+     *   [{ "row": "Row A", "col": "Col 1", "value": 10.0 }, ...]
+     *
+     * It will:
+     * - Clear existing cells and groups.
+     * - Use row index 0 as header row (column labels).
+     * - Use column index 0 as header column (row labels).
+     * - Fill numeric cells with the sum of `value` for each (row, col) pair.
+     * @param {string} json
+     */
+    load_pivot_json(json) {
+        const ptr0 = passStringToWasm0(json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.grid_load_pivot_json(this.__wbg_ptr, ptr0, len0);
+    }
+    /**
      * @param {number} dr
      * @param {number} dc
      */

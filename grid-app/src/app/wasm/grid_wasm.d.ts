@@ -20,6 +20,19 @@ export class Grid {
     hit_test(cx: number, cy: number): string;
     is_resizing(): boolean;
     load_cells_json(json: string): void;
+    /**
+     * Load data in a simple pivot-table shape.
+     *
+     * Expects JSON like:
+     *   [{ "row": "Row A", "col": "Col 1", "value": 10.0 }, ...]
+     *
+     * It will:
+     * - Clear existing cells and groups.
+     * - Use row index 0 as header row (column labels).
+     * - Use column index 0 as header column (row labels).
+     * - Fill numeric cells with the sum of `value` for each (row, col) pair.
+     */
+    load_pivot_json(json: string): void;
     move_selection(dr: number, dc: number): void;
     constructor(vw: number, vh: number);
     remove_group(group_id: number): void;
@@ -62,6 +75,7 @@ export interface InitOutput {
     readonly grid_hit_test: (a: number, b: number, c: number) => [number, number];
     readonly grid_is_resizing: (a: number) => number;
     readonly grid_load_cells_json: (a: number, b: number, c: number) => void;
+    readonly grid_load_pivot_json: (a: number, b: number, c: number) => void;
     readonly grid_move_selection: (a: number, b: number, c: number) => void;
     readonly grid_new: (a: number, b: number) => number;
     readonly grid_remove_group: (a: number, b: number) => void;

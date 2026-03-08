@@ -23,6 +23,14 @@ impl Default for CellData {
     }
 }
 
+// Simple pivot input record: one row key, one column key, and a numeric value.
+#[derive(Deserialize, Debug)]
+struct PivotRecord {
+    row: String,
+    col: String,
+    value: f64,
+}
+
 // ─── Group ───────────────────────────────────────────────────────────
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -177,6 +185,8 @@ impl Grid {
     // ─── Cell ops ────────────────────────────────────────────────
 
     pub fn set_cell(&mut self, row: u32, col: u32, text: &str) {
+        let test = "test".to_string();
+        let value = format!("{}_{}", test, text);
         self.cells.entry((row, col)).or_default().text = text.to_string();
     }
 
@@ -200,6 +210,73 @@ impl Grid {
             for (r, c, t) in data {
                 self.set_cell(r, c, &t);
             }
+        }
+    }
+
+    /// Load data in a simple pivot-table shape.
+    ///
+    /// Expects JSON like:
+    ///   [{ "row": "Row A", "col": "Col 1", "value": 10.0 }, ...]
+    ///
+    /// It will:
+    /// - Clear existing cells and groups.
+    /// - Use row index 0 as header row (column labels).
+    /// - Use column index 0 as header column (row labels).
+    /// - Fill numeric cells with the sum of `value` for each (row, col) pair.
+    pub fn load_pivot_json(&mut self, json: &str) {
+        let records: Vec<PivotRecord> = match serde_json::from_str(json) {
+            Ok(v) => v,
+            Err(_) => return,
+        };
+
+        // Reset grid content but keep sizing/viewport.
+        self.cells.clear();
+        self.row_groups.clear();
+        self.col_groups.clear();
+        self.hidden_rows.clear();
+        self.hidden_cols.clear();
+        self.hidden_dirty = true;
+        self.sel_row = -1;
+        self.sel_col = -1;
+        self.edit_row = -1;
+        self.edit_col = -1;
+
+        // Map row/col labels to indices. Reserve 0 for headers.
+        let mut row_index: BTreeMap<String, u32> = BTreeMap::new();
+        let mut col_index: BTreeMap<String, u32> = BTreeMap::new();
+        let mut next_row: u32 = 1;
+        let mut next_col: u32 = 1;
+
+        let mut agg: HashMap<(u32, u32), f64> = HashMap::new();
+
+        for rec in records {
+            let r = *row_index.entry(rec.row).or_insert_with(|| {
+                let idx = next_row;
+                next_row += 1;
+                idx
+            });
+            let c = *col_index.entry(rec.col).or_insert_with(|| {
+                let idx = next_col;
+                next_col += 1;
+                idx
+            });
+
+            *agg.entry((r, c)).or_insert(0.0) += rec.value;
+        }
+
+        // Header row: column labels in row 0, columns 1..N
+        for (label, c) in &col_index {
+            self.set_cell(0, *c, label);
+        }
+
+        // Header column: row labels in column 0, rows 1..M
+        for (label, r) in &row_index {
+            self.set_cell(*r, 0, label);
+        }
+
+        // Data cells: aggregated values
+        for ((r, c), val) in agg {
+            self.set_cell(r, c, &format!("{}", val));
         }
     }
 
